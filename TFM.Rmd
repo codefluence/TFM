@@ -1,0 +1,391 @@
+---
+title: "gene expression cancer RNA-Seq"
+date: "20/02/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data description
+
+Source: Samuele Fiorini, samuele.fiorini@dibris.unige.it, University of Genoa, redistributed under Creative Commons license.  
+Download: https://www.kaggle.com/murats/gene-expression-cancer-rnaseq
+
+\  
+
+Number of observations: 801  
+Number of predictors: 20532  
+
+\  
+
+The observations represent patients with primary tumors occurring in different parts of the body, covering 12 tumor types (the response categorical variable) including:  
+
+* lung adenocarcinoma (LUAD)  
+* breast carcinoma (BRCA)  
+* kidney renal clear-cell carcinoma (KIRC)  
+* colon adenocarcinoma (COAD)  
+* prostate adenocarcinoma (PRAD)  
+
+\  
+
+All the predictors are continuous variables representing RNA-Seq gene expression levels measured by a sequencing platform.  
+
+```{r include=FALSE}
+library(stats)
+library(factoextra)
+library(glmnet)
+
+data = read.csv(file = 'TFM/data.csv')
+data = data[,-1] #removing sample name column
+
+# a few columns only contain 0 values, these are removed
+data = data[,colSums(data != 0) > 0]
+
+labels = read.csv(file = 'TFM/labels.csv')[,2]
+```
+
+\newpage  
+
+kde of 12 predictors picked at random:  
+
+```{r echo=FALSE}
+par(mfrow = c(3,4))
+for (i in sample(1:20532, 12)) {
+  plot(density(data[,i]))
+}
+```
+
+\  
+
+Response absolute frequencies:  
+
+```{r echo=FALSE, fig.width=5, fig.height=3}
+barplot(table(labels), col=rainbow(15, s=0.5), ylab="Absolute frequencies", xlab="Cancer Type")
+```
+
+\newpage 
+
+55% of the variability in the data is explained by 10 PCs:  
+
+```{r echo=FALSE}
+data_pca = prcomp(data)
+ev = get_eigenvalue(data_pca)
+fviz_eig(data_pca,ncp=30,addlabels=T,barfill="deepskyblue2",barcolor="deepskyblue4")
+```
+
+\newpage 
+
+First 2 PCs look enough to classify the types of cancer:  
+
+```{r echo=FALSE}
+cs = rep(1,nrow(data))
+cs = ifelse(labels=="COAD",2,cs)
+cs = ifelse(labels=="BRCA",3,cs)
+cs = ifelse(labels=="PRAD",4,cs)
+cs = ifelse(labels=="KIRC",5,cs)
+cs = ifelse(labels=="LUAD",6,cs)
+
+colours = rainbow(7, s=0.5)[cs]
+
+plot(data_pca$x[,1:2], pch=19, col=colours)
+
+legend('bottomright', bty = "n", c("COAD","BRCA","PRAD","KIRC","LUAD"), lty = 1, lwd = 2, col = c(rainbow(7, s=0.5)[2], rainbow(7, s=0.5)[3], rainbow(7, s=0.5)[4], rainbow(7, s=0.5)[5], rainbow(7, s=0.5)[6]))
+```
+
+pred_range = apply(data, 2, range)
+plot(density(pred_range[2,] - pred_range[1,]), main="range width")
+
+\newpage 
+
+## Lasso
+
+Since p >> n, the estimation of the coefficients in a linear model will suffer from high variance. A lasso model is fit in order to reduce the output error (introducing some bias but largely decreasing variance). Lasso also performs variable selection which helps with interpretability. The aim is to reduce the number of predictors from more than 20,000 to just a bunch.  
+
+500 observations are used to fit the model, 300 to measure the accuracy.  
+
+```{r echo=TRUE, fig.width=5, fig.height=6}
+training_index = sample(1:nrow(data), 500)
+
+x_lasso_train = as.matrix(data[training_index,])
+y_lasso_train = as.numeric(labels[training_index])
+x_lasso_test = as.matrix(data[-training_index,])
+y_lasso_test = as.numeric(labels[-training_index])
+
+set.seed(1)
+```
+
+```{r echo=TRUE, fig.width=6, fig.height=9}
+# no need to scale the data, glmnet does it by default
+cvfit = cv.glmnet(x_lasso_train, y_lasso_train, alpha = 1, family = "multinomial")
+coeffs = coef(cvfit, s = "lambda.min")
+
+par(mfrow = c(3,2))
+plot(cvfit)
+
+fit = glmnet(x_lasso_train, y_lasso_train, alpha = 1, family = "multinomial")
+plot(fit, xvar="lambda", label = TRUE, xlim=c(-6,-1))
+
+#TODO: find a way to apply the text to all the 5 plots returned by plot.glmnet
+text(log(cvfit$lambda.min), coeffs[["5"]]@x[-1], labels=colnames(x_lasso_test[,coeffs[["5"]]@i[-1]]), pos=4, col="firebrick2", cex=0.7)
+abline(v = log(cvfit$lambda.min))
+```
+
+The plots show the coefficient values for the selected predictors for each category. The higher the absolute value, the higher the influence (globally) in the output.  
+Note that the numbers in the plot correspond to column indices. In the last plot, for category 5, the name of the predictors are displayed in red too.  
+
+
+\  
+
+
+The accuracy of the test data prediction is very close to 1. The categories are very well "separated" from each other in the input space as seen in the PC1 vs PC2 plot which only accounts for 25% of the variability of the data, leading to the high accuracy.
+
+```{r echo=TRUE}
+test = predict(cvfit, newx = x_lasso_test, s = cvfit$lambda.min, type="response")
+pred = max.col(as.data.frame(test))
+
+mean(y_lasso_test == pred)
+```
+
+The mean output (using 0 for misclassifications):
+
+```{r echo=TRUE}
+mean(apply(test[,,1],1,max) * as.integer(as.integer(y_lasso_test) == pred))
+```
+
+\  
+
+Lasso shrinks less significant coefficients to 0 as $\lambda$ increases (as in a linear optimization problem with constraint vertices in the predictor axes). With the optimal $\lambda$ computed numerically, the remaining significant predictors are:
+
+```{r echo=TRUE}
+sig_index = Reduce(union,c(coeffs[["1"]]@i,coeffs[["2"]]@i,coeffs[["3"]]@i,coeffs[["4"]]@i,coeffs[["5"]]@i))
+# coeffs is a list of dgCMatrix
+# @i are indices of non-zero values in the matrix (first one corresponds to the y-intercept)
+# @x are the coefficients corresponding to the indices
+
+colnames(x_lasso_test[,sig_index])
+```
+
+\  
+
+Most of the coefficients have positive values:
+
+```{r echo=TRUE, fig.width=7, fig.height=8}
+sig_predictors = NULL
+
+for (label in 1:5){
+  for (index in 2:length(coeffs[[label]]@i))  {
+    predictor = colnames(data)[coeffs[[label]]@i[index]]
+    sigpre = data.frame(label=label, coefficient=coeffs[[label]]@x[index], predictor=predictor)
+    sig_predictors = rbind(sig_predictors, sigpre)
+  }
+}
+
+plot(sig_predictors$label, sig_predictors$coefficient, xlim = c(1,5.7))
+abline(h=0)
+text(sig_predictors$label, sig_predictors$coefficient, labels=sig_predictors$predictor, pos=4, col="firebrick2", cex=1)
+```
+
+\newpage
+
+Fitting again the model but only including the significant predictors returned by the previous fit, plus all the 2-way interactions between the significant predictors:  
+
+```{r echo=TRUE}
+f = as.formula(y ~ .*.)
+y = y_lasso_train
+x = model.matrix(f, data[training_index,sig_index])[,-1] #first column is the intersect - it's removed
+cvfit_inter = cv.glmnet(x, y, alpha=1, family="multinomial")
+coeffs_inter = coef(cvfit_inter, s = "lambda.min")
+
+sig_index_inter = Reduce(union,c( coeffs_inter[["1"]]@i,
+                                  coeffs_inter[["2"]]@i,
+                                  coeffs_inter[["3"]]@i,
+                                  coeffs_inter[["4"]]@i,
+                                  coeffs_inter[["5"]]@i))
+
+colnames(x[,sig_index_inter])
+```
+
+\  
+
+```{r echo=TRUE, fig.width=7, fig.height=10}
+data_sig_inter = as.data.frame(x)
+
+sig_predictors_inter = NULL
+for (label in 1:5){
+  for (index in 2:length(coeffs_inter[[label]]@i))  {
+    predictor = colnames(data_sig_inter)[coeffs_inter[[label]]@i[index]]
+    sigpre = data.frame(label=label, coefficient=coeffs_inter[[label]]@x[index], predictor=predictor)
+    sig_predictors_inter = rbind(sig_predictors_inter, sigpre)
+  }
+}
+plot(sig_predictors_inter$label, sig_predictors_inter$coefficient, xlim = c(1,5.7), ylim = c(0,.025))
+abline(h=0)
+text(sig_predictors_inter$label, sig_predictors_inter$coefficient, labels=sig_predictors_inter$predictor, pos=4, col="firebrick2", cex=1)
+```
+
+The performance is similar - very high:
+
+```{r echo=TRUE}
+f_test <- as.formula(y_lasso_test ~ .*.)
+x_test <- model.matrix(f_test, data[-training_index,sig_index])[,-1] #first column is the intersect - it's removed
+
+test_inter = predict(cvfit_inter, newx = x_test, s = cvfit_inter$lambda.min, type="response")
+pred_inter = max.col(as.data.frame(test_inter))
+
+mean(y_lasso_test == pred_inter)
+mean(apply(test_inter[,,1],1,max) * as.integer(as.integer(y_lasso_test) == pred_inter))
+```
+
+
+
+\newpage
+
+
+## Densely connected network
+
+The problem of classifying patients into types of cancer from a large number of predictors is similar to the classic example of classifying short newswires into topics (reuters 1986 dataset). Both are multiclass classifications from a very large number of predictors (in the reuters example, each predictor represents the presence or absence of a particular word - tens of thousands of usual words are included).  
+
+There is no need to preprocess the data, the rows in our dataset are ready to fed the model as input vectors.  
+
+```{r echo=TRUE}
+library(keras)
+
+# This scaling is advised...
+mean = apply(data[training_index,], 2, mean)
+sd = apply(data[training_index,], 2, sd)
+x_train = as.matrix(scale(data[training_index,], center = mean, scale = sd))
+x_test = as.matrix(scale(data[-training_index,], center = mean, scale = sd))
+# ...but this way the model diverges (loss=NA in the first iteration) 
+# TODO: why? #https://stackoverflow.com/questions/40050397/deep-learning-nan-loss-reasons
+
+# scaling the union of training data and test data instead..
+x_train = as.matrix(scale(data)[training_index,])
+x_test = as.matrix(scale(data)[-training_index,])
+
+y_train = to_categorical(as.numeric(labels[training_index]))
+y_test = to_categorical(as.numeric(labels[-training_index]))
+```
+
+The model is trained in a matter of few seconds and yields an accurucy very close to 100%. No need for regularization or any other technique to help with the reduction of overfitting.  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(keras)
+
+gmodel <- keras_model_sequential() %>% 
+  layer_dense(units = 16, activation = "relu", input_shape = ncol(x_train)) %>% 
+  layer_dense(units = 16, activation = "relu") %>% 
+  layer_dense(units = 6, activation = "softmax")
+
+#gmodel
+
+gmodel %>% compile(
+  optimizer = "rmsprop",
+  loss = "categorical_crossentropy",
+  metrics = c("accuracy")
+)
+
+validation_index = sample(1:nrow(x_train), 100)
+
+ghistory <- gmodel %>% fit(
+  x_train[-validation_index,],
+  y_train[-validation_index,],
+  epochs = 5,
+  batch_size = 32,
+  validation_data = list(x_train[validation_index,],  y_train[validation_index,])
+)
+
+#print(ghistory)
+
+(results <- gmodel %>% evaluate(x_test, y_test))
+
+output = gmodel %>% predict(x_test)
+```
+
+
+
+\  
+
+
+## LIME
+
+The Lasso model provides a global sense of the influence of the predictors. However if the data structure is complex it might not explain well the interpretation of particular predictions.  
+
+LIME (Local interpretable model-agnostic explanations) is a model-agnostic interpretability model that aims to explain better individual predictions by assuming that the data structure is linear around particular inputs. This technique simulates data around the input values by permuting predictor variables so there is enough data to fit a linear model.  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(lime)
+
+#class(gmodel())
+
+#?model_type
+
+# Setup of lime::model_type()
+model_type.keras.engine.sequential.Sequential <- function(x, ...) {"classification"}
+
+# Setup of lime::predict_model()
+predict_model.keras.engine.sequential.Sequential <- function (x, newdata, type, ...) {
+  pred <- predict(object = x, x = as.matrix(newdata))
+  data.frame(no_class = pred[,1], label1 = pred[,2], label2 = pred[,3], label3 = pred[,4], label4 = pred[,5], label5 = pred[,6])
+}
+
+predict_model (x = gmodel, 
+               newdata = as.data.frame(x_train), 
+               type    = 'raw') %>%
+tibble::as_tibble()
+
+# will be used to create hte local model
+explainer <- lime(
+  x = as.data.frame(x_train),
+  model = gmodel, 
+  bin_continuous = FALSE
+)
+
+#class(explainer)
+#summary(explainer)
+
+explanation <- lime::explain(
+  x = as.data.frame(x_train)[3,],
+  explainer = explainer, 
+  #n_permutations = 5000,
+  #dist_fun = "euclidean", #?dist()
+  #kernel_width = 0.75,
+  feature_select = "lasso_path",
+  n_features = 10,
+  labels = 6,
+)
+
+#very los r-squared: too many variables? plot pc1-pc2
+#not necessarily bad, high variance
+
+#difference of values with global lasso, because this is local
+
+plot_features(explanation)
+```
+
+R-squared ("explanation fit") is very low. This doesn't necesarily mean that the local model doesn't fit well, the variance in the data is high as seen in the PCA plot, 10 PCs are required for just 55% of explained variance.  
+
+
+\  
+
+
+## Shapley values
+
+
+\  
+
+
+## KernelSHAP
+
+
+
+
+
+
+
+
+
+
+
+
