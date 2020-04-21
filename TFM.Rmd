@@ -33,20 +33,20 @@ The observations represent patients with primary tumors occurring in different p
 All the predictors are continuous variables representing RNA-Seq gene expression levels measured by a sequencing platform.  
 
 ```{r include=FALSE}
-library(stats)
-library(factoextra)
-library(glmnet)
-
-data = read.csv(file = 'TFM/data.csv')
+data = read.csv(file = 'D:/books/data science/Machine Learning/TFM/data/data.csv')
 data = data[,-1] #removing sample name column
 
 # a few columns only contain 0 values, these are removed
 data = data[,colSums(data != 0) > 0]
 
-labels = read.csv(file = 'TFM/labels.csv')[,2]
+labels = read.csv(file = 'D:/books/data science/Machine Learning/TFM/data/labels.csv')[,2]
 ```
 
+
+
 \newpage  
+
+
 
 kde of 12 predictors picked at random:  
 
@@ -70,6 +70,7 @@ barplot(table(labels), col=rainbow(15, s=0.5), ylab="Absolute frequencies", xlab
 55% of the variability in the data is explained by 10 PCs:  
 
 ```{r echo=FALSE}
+library(factoextra)
 data_pca = prcomp(data)
 ev = get_eigenvalue(data_pca)
 fviz_eig(data_pca,ncp=30,addlabels=T,barfill="deepskyblue2",barcolor="deepskyblue4")
@@ -94,10 +95,11 @@ plot(data_pca$x[,1:2], pch=19, col=colours)
 legend('bottomright', bty = "n", c("COAD","BRCA","PRAD","KIRC","LUAD"), lty = 1, lwd = 2, col = c(rainbow(7, s=0.5)[2], rainbow(7, s=0.5)[3], rainbow(7, s=0.5)[4], rainbow(7, s=0.5)[5], rainbow(7, s=0.5)[6]))
 ```
 
-pred_range = apply(data, 2, range)
-plot(density(pred_range[2,] - pred_range[1,]), main="range width")
+
 
 \newpage 
+
+
 
 ## Lasso
 
@@ -109,31 +111,35 @@ Since p >> n, the estimation of the coefficients in a linear model will suffer f
 training_index = sample(1:nrow(data), 500)
 
 x_lasso_train = as.matrix(data[training_index,])
-y_lasso_train = as.numeric(labels[training_index])
+y_lasso_train = as.numeric(labels[training_index])-1  # to start categories from 0 (as expected by keras)
 x_lasso_test = as.matrix(data[-training_index,])
-y_lasso_test = as.numeric(labels[-training_index])
-
-set.seed(1)
+y_lasso_test = as.numeric(labels[-training_index])-1  # to start categories from 0 (as expected by keras)
 ```
 
 ```{r echo=TRUE, fig.width=6, fig.height=9}
 # no need to scale the data, glmnet does it by default
+library(glmnet)
 cvfit = cv.glmnet(x_lasso_train, y_lasso_train, alpha = 1, family = "multinomial")
 coeffs = coef(cvfit, s = "lambda.min")
 
 par(mfrow = c(3,2))
 plot(cvfit)
+# 0 BRCA
+# 1 COAD
+# 2 KIRC
+# 3 LUAD
+# 4 PRAD
 
 fit = glmnet(x_lasso_train, y_lasso_train, alpha = 1, family = "multinomial")
 plot(fit, xvar="lambda", label = TRUE, xlim=c(-6,-1))
 
 #TODO: find a way to apply the text to all the 5 plots returned by plot.glmnet
-text(log(cvfit$lambda.min), coeffs[["5"]]@x[-1], labels=colnames(x_lasso_test[,coeffs[["5"]]@i[-1]]), pos=4, col="firebrick2", cex=0.7)
+text(log(cvfit$lambda.min), coeffs[["4"]]@x[-1], labels=colnames(x_lasso_test[,coeffs[["4"]]@i[-1]]), pos=4, col="firebrick2", cex=0.7)
 abline(v = log(cvfit$lambda.min))
 ```
 
 The plots show the coefficient values for the selected predictors for each category. The higher the absolute value, the higher the influence (globally) in the output.  
-Note that the numbers in the plot correspond to column indices. In the last plot, for category 5, the name of the predictors are displayed in red too.  
+Note that the numbers in the plot correspond to column indices. In the last plot, for category 4 (PRAD), the name of the predictors are displayed in red too.  
 
 
 \  
@@ -143,7 +149,7 @@ The accuracy of the test data prediction is very close to 1. The categories are 
 
 ```{r echo=TRUE}
 test = predict(cvfit, newx = x_lasso_test, s = cvfit$lambda.min, type="response")
-pred = max.col(as.data.frame(test))
+pred = max.col(as.data.frame(test))-1
 
 mean(y_lasso_test == pred)
 ```
@@ -159,32 +165,36 @@ mean(apply(test[,,1],1,max) * as.integer(as.integer(y_lasso_test) == pred))
 Lasso shrinks less significant coefficients to 0 as $\lambda$ increases (as in a linear optimization problem with constraint vertices in the predictor axes). With the optimal $\lambda$ computed numerically, the remaining significant predictors are:
 
 ```{r echo=TRUE}
-sig_index = Reduce(union,c(coeffs[["1"]]@i,coeffs[["2"]]@i,coeffs[["3"]]@i,coeffs[["4"]]@i,coeffs[["5"]]@i))
+sig_index = Reduce(union,c(coeffs[["0"]]@i,coeffs[["1"]]@i,coeffs[["2"]]@i,coeffs[["3"]]@i,coeffs[["4"]]@i))
 # coeffs is a list of dgCMatrix
 # @i are indices of non-zero values in the matrix (first one corresponds to the y-intercept)
 # @x are the coefficients corresponding to the indices
 
-colnames(x_lasso_test[,sig_index])
+colnames(x_lasso_train[,sig_index])
 ```
 
 \  
 
-Most of the coefficients have positive values:
+Lasso coefficients heatmap:
 
-```{r echo=TRUE, fig.width=7, fig.height=8}
-sig_predictors = NULL
+```{r echo=TRUE, fig.width=6, fig.height=15}
+sparse = as.matrix(coeffs[["0"]])
+sparse = cbind(sparse,as.matrix(coeffs[["1"]]))
+sparse = cbind(sparse,as.matrix(coeffs[["2"]]))
+sparse = cbind(sparse,as.matrix(coeffs[["3"]]))
+sparse = cbind(sparse,as.matrix(coeffs[["4"]]))
+colnames(sparse) = c("BRCA","COAD","KIRC","LUAD","PRAD")
 
-for (label in 1:5){
-  for (index in 2:length(coeffs[[label]]@i))  {
-    predictor = colnames(data)[coeffs[[label]]@i[index]]
-    sigpre = data.frame(label=label, coefficient=coeffs[[label]]@x[index], predictor=predictor)
-    sig_predictors = rbind(sig_predictors, sigpre)
-  }
-}
+sparse = sparse[-1,] #removing intercept row
+coeff_matrix = sparse[rowSums(sparse) != 0,] #removing rows with all coeffs set to 0
 
-plot(sig_predictors$label, sig_predictors$coefficient, xlim = c(1,5.7))
-abline(h=0)
-text(sig_predictors$label, sig_predictors$coefficient, labels=sig_predictors$predictor, pos=4, col="firebrick2", cex=1)
+col_breaks = c(seq(-0.34,-0.0001,length=100),  # for red
+               seq(+0.0001,+0.34,length=100))  # for blue
+
+library(unikn)
+library(gplots)
+my_palette <- c(colorRampPalette(c("red","white"))(n = 99), "white", colorRampPalette(c("white","blue"))(n = 99))
+heatmap.2(coeff_matrix, col= my_palette, breaks=col_breaks, dendrogram="row", symkey=FALSE)
 ```
 
 \newpage
@@ -198,31 +208,36 @@ x = model.matrix(f, data[training_index,sig_index])[,-1] #first column is the in
 cvfit_inter = cv.glmnet(x, y, alpha=1, family="multinomial")
 coeffs_inter = coef(cvfit_inter, s = "lambda.min")
 
-sig_index_inter = Reduce(union,c( coeffs_inter[["1"]]@i,
+sig_index_inter = Reduce(union,c( coeffs_inter[["0"]]@i,
+                                  coeffs_inter[["1"]]@i,
                                   coeffs_inter[["2"]]@i,
                                   coeffs_inter[["3"]]@i,
-                                  coeffs_inter[["4"]]@i,
-                                  coeffs_inter[["5"]]@i))
+                                  coeffs_inter[["4"]]@i))
 
 colnames(x[,sig_index_inter])
 ```
 
 \  
 
-```{r echo=TRUE, fig.width=7, fig.height=10}
-data_sig_inter = as.data.frame(x)
+```{r eval=FALSE, fig.height=9, fig.width=7, include=FALSE}
+sparse = as.matrix(coeffs_inter[["0"]])
+sparse = cbind(sparse,as.matrix(coeffs_inter[["1"]]))
+sparse = cbind(sparse,as.matrix(coeffs_inter[["2"]]))
+sparse = cbind(sparse,as.matrix(coeffs_inter[["3"]]))
+sparse = cbind(sparse,as.matrix(coeffs_inter[["4"]]))
+colnames(sparse) = c("BRCA","COAD","KIRC","LUAD","PRAD")
 
-sig_predictors_inter = NULL
-for (label in 1:5){
-  for (index in 2:length(coeffs_inter[[label]]@i))  {
-    predictor = colnames(data_sig_inter)[coeffs_inter[[label]]@i[index]]
-    sigpre = data.frame(label=label, coefficient=coeffs_inter[[label]]@x[index], predictor=predictor)
-    sig_predictors_inter = rbind(sig_predictors_inter, sigpre)
-  }
-}
-plot(sig_predictors_inter$label, sig_predictors_inter$coefficient, xlim = c(1,5.7), ylim = c(0,.025))
-abline(h=0)
-text(sig_predictors_inter$label, sig_predictors_inter$coefficient, labels=sig_predictors_inter$predictor, pos=4, col="firebrick2", cex=1)
+sparse = sparse[-1,] #removing intercept row
+coeff_matrix = sparse[rowSums(sparse) != 0,] #removing rows with all coeffs_inter set to 0
+coeff_matrix = coeff_matrix[,]
+
+col_breaks = c(seq(-0.34,-0.0001,length=100),  # for red
+               seq(+0.0001,+0.34,length=100))  # for blue
+
+library(unikn)
+library(gplots)
+my_palette <- c(colorRampPalette(c("red","white"))(n = 99), "white", colorRampPalette(c("white","blue"))(n = 99))
+heatmap.2(coeff_matrix, col= my_palette, breaks=col_breaks, dendrogram="row", symkey=FALSE)
 ```
 
 The performance is similar - very high:
@@ -232,7 +247,7 @@ f_test <- as.formula(y_lasso_test ~ .*.)
 x_test <- model.matrix(f_test, data[-training_index,sig_index])[,-1] #first column is the intersect - it's removed
 
 test_inter = predict(cvfit_inter, newx = x_test, s = cvfit_inter$lambda.min, type="response")
-pred_inter = max.col(as.data.frame(test_inter))
+pred_inter = max.col(as.data.frame(test_inter))-1
 
 mean(y_lasso_test == pred_inter)
 mean(apply(test_inter[,,1],1,max) * as.integer(as.integer(y_lasso_test) == pred_inter))
@@ -264,8 +279,8 @@ x_test = as.matrix(scale(data[-training_index,], center = mean, scale = sd))
 x_train = as.matrix(scale(data)[training_index,])
 x_test = as.matrix(scale(data)[-training_index,])
 
-y_train = to_categorical(as.numeric(labels[training_index]))
-y_test = to_categorical(as.numeric(labels[-training_index]))
+y_train = to_categorical(as.numeric(labels[training_index])-1)
+y_test = to_categorical(as.numeric(labels[-training_index])-1)
 ```
 
 The model is trained in a matter of few seconds and yields an accurucy very close to 100%. No need for regularization or any other technique to help with the reduction of overfitting.  
@@ -276,7 +291,7 @@ library(keras)
 gmodel <- keras_model_sequential() %>% 
   layer_dense(units = 16, activation = "relu", input_shape = ncol(x_train)) %>% 
   layer_dense(units = 16, activation = "relu") %>% 
-  layer_dense(units = 6, activation = "softmax")
+  layer_dense(units = 5, activation = "softmax")
 
 #gmodel
 
@@ -287,6 +302,8 @@ gmodel %>% compile(
 )
 
 validation_index = sample(1:nrow(x_train), 100)
+
+set.seed(1)
 
 ghistory <- gmodel %>% fit(
   x_train[-validation_index,],
@@ -300,19 +317,24 @@ ghistory <- gmodel %>% fit(
 
 (results <- gmodel %>% evaluate(x_test, y_test))
 
+plot(ghistory)
+
 output = gmodel %>% predict(x_test)
 ```
 
 
 
-\  
+\newpage 
 
 
 ## LIME
 
 The Lasso model provides a global sense of the influence of the predictors. However if the data structure is complex it might not explain well the interpretation of particular predictions.  
 
-LIME (Local interpretable model-agnostic explanations) is a model-agnostic interpretability model that aims to explain better individual predictions by assuming that the data structure is linear around particular inputs. This technique simulates data around the input values by permuting predictor variables so there is enough data to fit a linear model.  
+LIME (Local interpretable model-agnostic explanations) is a model-agnostic interpretability model that aims to explain better individual predictions by assuming that the data structure is linear around particular inputs. This technique simulates data around the input values by permuting predictor variables so there is enough data to fit a linear model localy.  
+
+_glmnet_ is not supported by the LIME library (lime::?model_type).  
+Since LIME is model-agnostic and the keras model has almost 100% accuracy we'll use it for interpretation of the predictions.  
 
 ```{r echo=TRUE, message=FALSE, warning=FALSE}
 library(lime)
@@ -327,7 +349,7 @@ model_type.keras.engine.sequential.Sequential <- function(x, ...) {"classificati
 # Setup of lime::predict_model()
 predict_model.keras.engine.sequential.Sequential <- function (x, newdata, type, ...) {
   pred <- predict(object = x, x = as.matrix(newdata))
-  data.frame(no_class = pred[,1], label1 = pred[,2], label2 = pred[,3], label3 = pred[,4], label4 = pred[,5], label5 = pred[,6])
+  data.frame(BRCA = pred[,1], COAD = pred[,2], KIRC = pred[,3], LUAD = pred[,4], PRAD = pred[,5])
 }
 
 predict_model (x = gmodel, 
@@ -345,44 +367,82 @@ explainer <- lime(
 #class(explainer)
 #summary(explainer)
 
-explanation <- lime::explain(
-  x = as.data.frame(x_train)[3,],
+```
+
+4 data points of category COAD are analysed - COAD contains the highest coefficient in Lasso and the fewer number of selected predictors.  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, fig.width=8, fig.height=8}
+set.seed(1)
+datapoints_index = which(labels[training_index] == "COAD")[1:4]
+
+explanation_COAD <- lime::explain(
+  x = as.data.frame(x_train)[datapoints_index,],
   explainer = explainer, 
-  #n_permutations = 5000,
+  n_permutations = 10000,
   #dist_fun = "euclidean", #?dist()
   #kernel_width = 0.75,
   feature_select = "lasso_path",
   n_features = 10,
-  labels = 6,
+  n_labels = 1
 )
 
-#very los r-squared: too many variables? plot pc1-pc2
-#not necessarily bad, high variance
-
-#difference of values with global lasso, because this is local
-
-plot_features(explanation)
+plot_features(explanation_COAD)
 ```
 
-R-squared ("explanation fit") is very low. This doesn't necesarily mean that the local model doesn't fit well, the variance in the data is high as seen in the PCA plot, 10 PCs are required for just 55% of explained variance.  
+The same for 4 data points of category PRAD:
 
+```{r echo=TRUE, message=FALSE, warning=FALSE, fig.width=8, fig.height=8}
+set.seed(1)
+datapoints_index = which(labels[training_index] == "PRAD")[1:4]
+
+explanation_PRAD <- lime::explain(
+  x = as.data.frame(x_train)[datapoints_index,],
+  explainer = explainer, 
+  n_permutations = 10000,
+  #dist_fun = "euclidean", #?dist()
+  #kernel_width = 0.75,
+  feature_select = "lasso_path",
+  n_features = 10,
+  n_labels = 1
+)
+
+plot_features(explanation_PRAD)
+```
+
+
+\newpage 
+
+
+**Observations:**  
+
+Each time the LIME model is run, the selected coefficients explaining the outputs are different (unless a seed is set before execution). The reason for this could come from:  
+
+* Not enough number of permutations for the large number of predictors we have (>20000), leading to the "simulated" data to be very different each time for the same data point. I tried increasing _n_permutations_ from 5000 (default) to 25000 but the results keep changing (and not enough RAM - 32 GB - to increase the value more than that; takes very long too).  
+
+* High variance and low correlation between predictors as seen in the PCA analysis. $R^2$ of the local models ("explanation fit" in the LIME plots) is very low for all the data points analysed.  
+
+Different data points for the same category are explained by different predictors too.  
 
 \  
 
+No common genes are found between Lasso selected predictors and LIME explanation predictors (tried several times):
 
-## Shapley values
+```{r echo=TRUE, message=FALSE}
+# no lasso selected predictor among all the predictors returned by LIME
+lime_feat = as.vector(explanation_COAD[["feature"]])
+lasso_feat = colnames(x_lasso_test[,sig_index])
+intersect(lasso_feat,lime_feat)
 
+lime_feat = as.vector(explanation_PRAD[["feature"]])
+lasso_feat = colnames(x_lasso_test[,sig_index])
+intersect(lasso_feat,lime_feat)
+```
 
-\  
+Reasons for this could be:  
 
+* A poor LIME model as described above.  
 
-## KernelSHAP
-
-
-
-
-
-
+* The more influential genes explaining individual predictions are different from the genes selected by Lasso. Having high variance but non-overlapping categories could lead to this? As a large variety of predictors are able to classify well all the categories, so small differences in the input will change which are the more influential predictors, Lasso only reflecting on "aggregate".  
 
 
 
