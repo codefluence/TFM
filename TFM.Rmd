@@ -1,6 +1,6 @@
 ---
-title: "gene expression cancer RNA-Seq"
-date: "20/02/2020"
+title: "Interpretation with LIME of classification in high-dimensional tabular data"
+date: "2020"
 output: pdf_document
 ---
 
@@ -8,42 +8,55 @@ output: pdf_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Data description
+
+\  
+
+\  
+
+\  
+
+\  
+
+
+## Introduction
+
+TODO
+
+
+
+\  
+
+\  
+
+
+## Data Description
+
+```{r include=FALSE}
+predictors = read.csv(file = 'data.csv')
+labels = read.csv(file = 'labels.csv')[,2]
+```
+
+The dataset was uploaded to Kaggle by/thanks to UCI Machine Learning Repository:  
+https://www.kaggle.com/murats/gene-expression-cancer-rnaseq  
 
 Source: Samuele Fiorini, samuele.fiorini@dibris.unige.it, University of Genoa, redistributed under Creative Commons license.  
-Download: https://www.kaggle.com/murats/gene-expression-cancer-rnaseq
 
-\  
+The data consists of 801 patients.  
 
-Number of observations: 801  
-Number of predictors: 20532  
+The 20532 independent variables are all RNA sequencing gene expression levels measured by a sequencing platform (Illumina HiSeq).  
 
-\  
-
-The observations represent patients with primary tumors occurring in different parts of the body, covering 12 tumor types (the response categorical variable) including:  
+The dependent categorical variable represent primary tumors occurring in different parts of the body, covering 5 tumor types including:  
 
 * lung adenocarcinoma (LUAD)  
 * breast carcinoma (BRCA)  
 * kidney renal clear-cell carcinoma (KIRC)  
 * colon adenocarcinoma (COAD)  
-* prostate adenocarcinoma (PRAD)  
+* prostate adenocarcinoma (PRAD) 
 
-\  
+A machine learning model will be trained to predict the type of tumor for new patients.  
+TODO: buscar un dataset similar pero que contenga tambien pacientes sanos.  
 
-All the predictors are continuous variables representing RNA-Seq gene expression levels measured by a sequencing platform.  
 
-```{r include=FALSE}
-data = read.csv(file = 'D:/books/data science/Machine Learning/TFM/data/data.csv')
-labels = read.csv(file = 'D:/books/data science/Machine Learning/TFM/data/labels.csv')[,2]
-
-genes = data[,-1] #removing sample name column
-
-# uncomment to reduce the number of predictors
-#genes = genes[,sample(1:ncol(genes), 5000)]
-
-# a few columns only contain 0 values, these are removed
-genes = genes[,colSums(genes != 0) > 0]
-```
 
 
 
@@ -51,149 +64,336 @@ genes = genes[,colSums(genes != 0) > 0]
 
 
 
-kde of 12 predictors picked at random. They look normal for the most part:  
-
-```{r echo=FALSE}
-par(mfrow = c(3,4))
-for (i in sample(1:ncol(genes), 12)) {
-  plot(density(genes[,i]))
-}
-```
-
-\  
-
-Response absolute frequencies:  
-
-```{r echo=FALSE, fig.width=5, fig.height=3}
-barplot(table(labels), col=rainbow(15, s=0.5), ylab="Absolute frequencies", xlab="Cancer Type")
-```
-
-\newpage 
-
-55% of the variability in the data is explained by 10 PCs:  
-
-```{r echo=FALSE}
-library(factoextra)
-genes_pca = prcomp(genes)
-ev = get_eigenvalue(genes_pca)
-fviz_eig(genes_pca,ncp=30,addlabels=T,barfill="deepskyblue2",barcolor="deepskyblue4")
-```
-
-\newpage 
-
-First 2 PCs look enough to classify the types of cancer:  
-
-```{r echo=FALSE}
-cs = rep(1,nrow(genes))
-cs = ifelse(labels=="COAD",2,cs)
-cs = ifelse(labels=="BRCA",3,cs)
-cs = ifelse(labels=="PRAD",4,cs)
-cs = ifelse(labels=="KIRC",5,cs)
-cs = ifelse(labels=="LUAD",6,cs)
-
-colours = rainbow(7, s=0.5)[cs]
-
-plot(genes_pca$x[,1:2], pch=19, col=colours)
-
-legend('bottomright', bty = "n", c("COAD","BRCA","PRAD","KIRC","LUAD"), lty = 1, lwd = 2, col = c(rainbow(7, s=0.5)[2], rainbow(7, s=0.5)[3], rainbow(7, s=0.5)[4], rainbow(7, s=0.5)[5], rainbow(7, s=0.5)[6]))
-```
 
 
 
-\newpage 
+
+## Data Analysis and Preprocessing
 
 
-
-## Lasso
-
-Since p >> n, the estimation of the coefficients in a linear model will suffer from high variance. A lasso model is fit in order to reduce the output error (introducing some bias but largely decreasing variance). Lasso also performs variable selection which helps with interpretability. The aim is to reduce the number of predictors from more than 20,000 to just a bunch.  
-
-80% observations are used to fit the model, the rest to measure the accuracy.  
-
-```{r echo=TRUE, fig.width=5, fig.height=6}
-training_index = sample(1:nrow(genes), round(nrow(genes) * 0.8))
-
-x_lasso_train = as.matrix(genes[training_index,])
-y_lasso_train = as.numeric(labels[training_index])-1  # categories start from 0 (as expected by keras)
-x_lasso_test = as.matrix(genes[-training_index,])
-y_lasso_test = as.numeric(labels[-training_index])-1  # categories start from 0 (as expected by keras)
-```
-
-```{r echo=TRUE, fig.width=6, fig.height=9}
-# no need to scale the data, glmnet does it by default
-library(glmnet)
-cvfit = cv.glmnet(x_lasso_train, y_lasso_train, alpha = 1, family = "multinomial")
-coeffs = coef(cvfit, s = "lambda.min")
-
-par(mfrow = c(3,2))
-plot(cvfit)
-
-fit = glmnet(x_lasso_train, y_lasso_train, alpha = 1, family = "multinomial")
-plot(fit, xvar="lambda", label = TRUE, xlim=c(-6,-1))
-
-#TODO: find a way to apply the text to all the 5 plots returned by plot.glmnet
-text(log(cvfit$lambda.min), coeffs[["4"]]@x[-1], labels=colnames(x_lasso_test[,coeffs[["4"]]@i[-1]]), pos=4, col="firebrick2", cex=0.7)
-abline(v = log(cvfit$lambda.min))
-```
-
+```{r include=FALSE}
+# keras expects the first category to be 0
 # 0 BRCA
 # 1 COAD
 # 2 KIRC
 # 3 LUAD
 # 4 PRAD
-
-The plots show the coefficient values for the selected predictors for each category. The higher the absolute value, the higher the influence (globally) in the output.  
-Note that the numbers in the plot correspond to column indices. In the last plot, for category 4 (PRAD), the name of the predictors are displayed in red too.  
-
+cancer = as.integer(labels) - 1
+```
 
 \  
 
+Absolute frequencies of the response:
 
-The accuracy of the test data prediction is close to 1. The categories barely overlap in the input space as seen in the PC1 vs PC2 plot which only accounts for 25% of the variability of the data, leading to the high accuracy.
-
-```{r echo=TRUE}
-test = predict(cvfit, newx = x_lasso_test, s = cvfit$lambda.min, type="response")
-pred = max.col(as.data.frame(test))-1
-
-mean(y_lasso_test == pred)
+```{r echo=FALSE, fig.width=4, fig.height=4, fig.align="center"}
+barplot(table(labels), col=rainbow(15, s=0.5), ylab="Absolute frequencies", xlab="Cancer Type")
 ```
 
-The mean output (using 0 for misclassifications):
+\  
+
+```{r include=FALSE, fig.width=4, fig.height=3, fig.align="center"}
+# removing sample name column
+genes = predictors[,-1]
+
+# a few columns only contain 0 values, these are removed
+genes = genes[,colSums(genes != 0) > 0]
+```
+
+
+268 gene expression variables contain only 0s are removed.  
+
+From the remaining 20264 gene expressions, 670 have at least 95% of 0s:
+
+```{r echo=FALSE, fig.width=4, fig.height=3, fig.align="center"}
+#table(stat_0s > 0.95)
+
+stat_0s = c()
+for(i in 1:ncol(genes))
+  stat_0s = c(stat_0s, round(length(genes[,i][genes[,i]==0])/nrow(genes),3))
+
+plot(density(stat_0s), main = "", xlab = "% of 0s")
+```
+
+\  
+
+The predictors don't follow distributions close to normal. Nornality cannot be assumed:
+
+```{r echo=FALSE, fig.width=4, fig.height=3, fig.align="center"}
+# Kolmogorov-Smirnov (K-S) normality test and Shapiro-Wilk’s test.
+
+stat_shap = c()
+for(i in 1:ncol(genes))
+  stat_shap = c(stat_shap,shapiro.test(genes[,i])$p.value)
+
+plot(density(stat_shap), xlim=c(0,0.1), main = "Shapiro-Wilk’s test", xlab = "p-value")
+```
+
+\  
+
+Symmetry and kurtosis:
+
+```{r echo=FALSE, fig.width=4, fig.height=3, fig.align="center"}
+library(moments)
+
+
+stat_skew = c()
+for(i in 1:ncol(genes))
+  stat_skew = c(stat_skew, skewness(genes[,i]))
+
+plot(density(stat_skew), main = "", xlim=c(-10,10), xlab = "skewness")
+abline(v=0, lty=2) #normal
+
+
+stat_kurt = c()
+for(i in 1:ncol(genes))
+  stat_kurt = c(stat_kurt, kurtosis(genes[,i]))
+
+plot(density(stat_kurt), main = "", xlim=c(0,50), xlab = "kurtosis")
+abline(v=3, lty=2) #normal
+```
+
+\  
+
+The distribution of means suggests there are two categories of gene expression:
+
+```{r echo=FALSE, fig.width=4, fig.height=3, fig.align="center"}
+stat_mean = c()
+for(i in 1:ncol(genes))
+  stat_mean = c(stat_mean, mean(genes[,i]))
+
+plot(density(stat_mean), main = "", xlab = "mean")
+```
+
+\  
+
+Outliers:
+
+TODO
+
+
+```{r eval=FALSE, include=FALSE, fig.width=4, fig.height=3, fig.align="center"}
+stat_sd = c()
+for(i in 1:ncol(genes))
+  stat_sd = c(stat_sd, sd(genes[,i]))
+
+plot(density(stat_sd), main = "", xlab = "sd")
+```
+
+\  
+
+The data is scaled to help with the training of the prediction model.  
+
+```{r include=FALSE}
+genes = scale(genes)
+```
+
+At least 45% of the variability of the data is explained by the first 10 PCA components:  
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.width=5, fig.height=4, fig.align="center"}
+library(factoextra)
+genes_pca = prcomp(genes)
+fviz_eig(genes_pca, ncp=30, addlabels=T, barfill="deepskyblue2", barcolor="deepskyblue4")
+get_eigenvalue(genes_pca)[1:10,]
+```
+
+\  
+
+First 4 PCs look enough to classify the types of cancer despite only accounting for 32.27% of the variability of the data, which suggests high collinearity:
+
+```{r echo=FALSE, fig.width=3, fig.height=3}
+genes_colours = rainbow(5, s=0.5)[cancer+1]
+
+plot.new()
+legend('center', bty = "n", c("BRCA","COAD","KIRC","LUAD","PRAD"), lty = 1, lwd = 2,
+       col = c(rainbow(5, s=0.5)[1], rainbow(5, s=0.5)[2], rainbow(5, s=0.5)[3], rainbow(5, s=0.5)[4], rainbow(5, s=0.5)[5]))
+```
+
+```{r echo=FALSE}
+pairs(genes_pca$x[,1:4], pch=19, col=genes_colours)
+```
+
+
+
+
+
+
+
+
+\newpage
+
+
+
+
+
+
+## Fully connected network
+
+\  
+
+A fully connected network is trained with 80% of the data:
+
+```{r include=FALSE}
+library(keras)
+
+training_index = sample(1:nrow(genes), round(nrow(genes) * 0.8))
+
+x_train = as.matrix(genes[training_index,])
+x_test = as.matrix(genes[-training_index,])
+
+y_train = to_categorical(cancer[training_index])
+y_test = to_categorical(cancer[-training_index])
+
+black_box <- keras_model_sequential() %>% 
+  layer_dense(units = 64, activation = "relu", input_shape = ncol(x_train)) %>% 
+  layer_dense(units = 64, activation = "relu") %>% 
+  layer_dense(units = 5, activation = "softmax")
+
+black_box %>% compile(
+  optimizer = "rmsprop",
+  loss = "categorical_crossentropy",
+  metrics = c("accuracy")
+)
+
+validation_index = sample(1:nrow(x_train), nrow(x_train)*0.2)
+
+black_box_history <- black_box %>% fit(
+  x_train[-validation_index,],
+  y_train[-validation_index,],
+  epochs = 4,
+  batch_size = 32,
+  validation_data = list(x_train[validation_index,],  y_train[validation_index,])
+)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+plot(black_box_history)
+```
+
+\  
+
+The accuracy of the network is close to 1 (sometimes 1 depending on the random initialization of the network):
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+black_box_pred = black_box %>% predict(x_test)
+black_box %>% evaluate(x_test, y_test)
+```
+
+\  
+
+Neural networks use to be power prediction tools but they come with a cost in terms of interpretability of the predictions. They contain a huge number of parameters making difficult the identification of features that are influetial in the response of the model.
+
+
+
+
+
+
+
+
+\newpage
+
+
+
+
+
+
+
+## Surrogate model
+
+\  
+
+To tackle the interpretability issue of the prediction model (which we'll call _black box_ from now on), a surrogate interpretable model is fitted in parallel. This surrogate model will help us to undestand the relationship between the features and the response at a global level (i.e. for no particular prediction).  
+
+
+Lasso will be the model of choice, as it performs feature selection efficiently for high-dimensional data and it's very easy to understand.  
+
+Because the purpose of this model is interpretation, we'll add a parameter on top of lasso to select the number of features we want to interpret the black box model. We'll fit several models with different lambdas and pick the one with the desired number of features. This is done for each category. With a fixed number of features we'll be able to fairly compare the surrogate model with other models with the same number of features as we'll later with LIME.  
+
+20 features are selected (about 0.1% of the total features).
+
+```{r echo=TRUE, fig.width=4, fig.height=4}
+library(glmnet)
+
+# this function looks for a lasso model with n_features selected for each category
+# (if possible, it will depend on the lambda grid)
+get_surrogate_features <- function(surrogate, n_features){
+
+  surrogate_coeffs = coef(surrogate)
+  
+  coeffs = vector(mode = "list", length = 5)
+  names(coeffs) = c("0","1","2","3","4")
+  index = coeffs
+  lambda = coeffs
+  
+  for (i in 0:4) {
+  
+    # code I picked up from the LIME package: https://github.com/thomasp85/lime/blob/49df0a131deee4919a29bb6093c116b80b766d3d/R/lime.R#L22
+    lasso_sparse = surrogate_coeffs[[as.character(i)]]
+    has_value <- apply(lasso_sparse[-1,], 2, function(x) x != 0) 
+    f_count <- apply(has_value, 2, sum)  # number of parameters for each lambda (columns in lasso_sparse)
+    
+    # In case that no model with correct n_feature size was found return features <= n_features
+    lambda_index <- rev(which(f_count <= n_features))[1]
+    
+    # Selected features
+    index[[as.character(i)]] = which(has_value[, lambda_index])
+    coeffs[[as.character(i)]] = lasso_sparse[which(has_value[, lambda_index])+1,lambda_index]
+    lambda[[as.character(i)]] = surrogate[["lambda"]][lambda_index]
+  }
+  
+  list(index = index, coeffs = coeffs, lambda = lambda)
+}
+
+n_features = 20
+surrogate = glmnet(x_train, cancer[training_index], alpha = 1, family = "multinomial", nlambda=300, lambda.min.ratio=0.001)
+surrogate_features = get_surrogate_features(surrogate, n_features)
+
+plot(surrogate, xvar="lambda", label = TRUE, xlim=c(-8,-1))
+```
+
+\  
+
+The plots above show the coefficient values for the selected features for each category. The higher the absolute value, the higher the influence (globally) in the output.  
+
+
+
+Because the number of features is fixed, the selected value for lambda is not optimal for the fitting. Not a problem since the accuracy of the Lasso model is close to 1 with the test data:  
+TODO: que pasa si el accuracy es mucho peor que el accuracy del black box model?  
 
 ```{r echo=TRUE}
-label_output_prob = apply(test[,,1],1,max) * as.integer(as.integer(y_lasso_test) == pred)
+# Each category has a different lambda. Here we use the smallest one for all the categories.
+min_lambda = min(as.numeric(surrogate_features$lambda))
+surrogate_test = predict(surrogate, newx = x_test, s = min_lambda, type="response")
+surrogate_pred = max.col(as.data.frame(surrogate_test))-1
+
+mean(cancer[-training_index] == surrogate_pred)
+```
+
+\  
+
+The mean output probability (using 0 for misclassifications):
+
+```{r echo=TRUE}
+label_output_prob = apply(surrogate_test[,,1],1,max) * as.integer(as.integer(cancer[-training_index]) == surrogate_pred)
 mean(label_output_prob)
 ```
 
-\  
 
-Lasso shrinks less significant coefficients to 0 as $\lambda$ increases (as in a linear optimization problem with constraint vertices in the predictor axes). With the optimal $\lambda$ computed numerically.  
-
-The remaining significant predictors are:
-
-```{r echo=TRUE}
-sig_index = Reduce(union,c(coeffs[["0"]]@i,coeffs[["1"]]@i,coeffs[["2"]]@i,coeffs[["3"]]@i,coeffs[["4"]]@i))
-# coeffs is a list of dgCMatrix
-# @i are indices of non-zero values in the matrix (first one corresponds to the y-intercept)
-# @x are the coefficients corresponding to the indices
-
-colnames(x_lasso_train[,sig_index])
-```
-
-\  
+\newpage
 
 Lasso coefficients heatmaps:
 
-```{r echo=TRUE, fig.width=6, fig.height=15}
-sparse = as.matrix(coeffs[["0"]])
-sparse = cbind(sparse,as.matrix(coeffs[["1"]]))
-sparse = cbind(sparse,as.matrix(coeffs[["2"]]))
-sparse = cbind(sparse,as.matrix(coeffs[["3"]]))
-sparse = cbind(sparse,as.matrix(coeffs[["4"]]))
+```{r echo=FALSE, fig.height=15, fig.width=6, message=FALSE, warning=FALSE}
+sparse_coeffs = coef(surrogate, s = min_lambda)
+
+sparse = as.matrix(sparse_coeffs[["0"]])
+sparse = cbind(sparse,as.matrix(sparse_coeffs[["1"]]))
+sparse = cbind(sparse,as.matrix(sparse_coeffs[["2"]]))
+sparse = cbind(sparse,as.matrix(sparse_coeffs[["3"]]))
+sparse = cbind(sparse,as.matrix(sparse_coeffs[["4"]]))
 colnames(sparse) = c("BRCA","COAD","KIRC","LUAD","PRAD")
 
 sparse = sparse[-1,] #removing intercept row
-coeff_matrix = sparse[rowSums(sparse) != 0,] #removing rows with all coeffs set to 0
+coeff_matrix = sparse[rowSums(sparse) != 0,] #removing rows with all surrogate_coeffs set to 0
 
 col_breaks = c(seq(-0.34,-0.0001,length=100),  # for red
                seq(+0.0001,+0.34,length=100))  # for blue
@@ -204,7 +404,7 @@ my_palette <- c(colorRampPalette(c("red","white"))(n = 99), "white", colorRampPa
 heatmap.2(coeff_matrix, col= my_palette, breaks=col_breaks, dendrogram="row", symkey=FALSE, key=FALSE)
 ```
 
-```{r echo=TRUE, fig.width=8, fig.height=8}
+```{r echo=FALSE, fig.height=8, fig.width=8, message=FALSE, warning=FALSE}
 for(i in 1:nrow(coeff_matrix)){
   for(j in 1:ncol(coeff_matrix)){
     coeff_matrix[i,j] <- ifelse(coeff_matrix[i,j] < 0, -1,
@@ -237,92 +437,128 @@ ggplot(to_plot2, aes(x = category, y = gene, fill = value)) +
         axis.ticks.y.left = element_blank())
 ```
 
-\newpage
+\  
+
+The variables selected by lasso give a global sense of the more influential predictors in driving the model, however, if the data is complex, in some regions of the input space the variables explaning the classifications could be completely different to the ones selected in the surrogate model.  
 
 
-## Densely connected network
-
-The problem of classifying patients into types of cancer from a large number of predictors is similar to the classic example of classifying short newswires into topics (reuters 1986 dataset). Both are multiclass classifications from a very large number of predictors (in the reuters example, each predictor represents the presence or absence of a particular word - tens of thousands of usual words are included).  
-
-There is no need to preprocess the data, the rows in our dataset are ready to fed the model as input vectors.  
-
-```{r echo=TRUE}
-library(keras)
-
-# This scaling is advised...
-mean = apply(genes[training_index,], 2, mean)
-sd = apply(genes[training_index,], 2, sd)
-x_train = as.matrix(scale(genes[training_index,], center = mean, scale = sd))
-x_test = as.matrix(scale(genes[-training_index,], center = mean, scale = sd))
-# ...but this way the model diverges (loss=NA in the first iteration) 
-# TODO: why? #https://stackoverflow.com/questions/40050397/deep-learning-nan-loss-reasons
-
-# scaling the union of training data and test data instead..
-x_train = as.matrix(scale(genes)[training_index,])
-x_test = as.matrix(scale(genes)[-training_index,])
-
-y_train = to_categorical(as.numeric(labels[training_index])-1)
-y_test = to_categorical(as.numeric(labels[-training_index])-1)
-```
-
-The model is trained in a matter of few seconds and yields an accuracy very close to 100%. No need for regularization or any other technique to help with the reduction of overfitting.  
-
-```{r echo=TRUE, message=FALSE, warning=FALSE}
-library(keras)
-
-gmodel <- keras_model_sequential() %>% 
-  layer_dense(units = 64, activation = "relu", input_shape = ncol(x_train)) %>% 
-  layer_dense(units = 64, activation = "relu") %>% 
-  layer_dense(units = 5, activation = "softmax")
-
-#gmodel
-
-set.seed(123)
-gmodel %>% compile(
-  optimizer = "rmsprop",
-  loss = "categorical_crossentropy",
-  metrics = c("accuracy")
-)
-
-validation_index = sample(1:nrow(x_train), nrow(x_train)*0.2)
-
-ghistory <- gmodel %>% fit(
-  x_train[-validation_index,],
-  y_train[-validation_index,],
-  epochs = 8,
-  batch_size = 32,
-  validation_data = list(x_train[validation_index,],  y_train[validation_index,])
-)
-
-#print(ghistory)
-
-(results <- gmodel %>% evaluate(x_test, y_test))
-
-plot(ghistory)
-
-output = gmodel %>% predict(x_test)
-```
 
 
 
 \newpage 
 
 
+
+
+
+
+
+
 ## LIME
 
-The Lasso model provides a global sense of the influence of the predictors. However if the data structure is complex it might not explain well the interpretation of particular predictions.  
+\  
 
-LIME (Local interpretable model-agnostic explanations) is a model-agnostic interpretability model that aims to explain better individual predictions by assuming that the data structure is linear around particular inputs. This technique simulates data around the input values by permuting predictor variables so there is enough data to fit a linear model localy.  
+**Intuition**  
 
-_glmnet_ is not supported by the LIME library (lime::?model_type).  
-Since LIME is model-agnostic and the keras model has almost 100% accuracy we'll use it for interpretation of the predictions.  
+TODO  
 
-```{r echo=TRUE, message=FALSE, warning=FALSE}
+(image taken from https://github.com/marcotcr/lime)
+```{r echo=FALSE, out.width = '80%', fig.align="center"}
+knitr::include_graphics("pictures/lime.png")
+```
+
+
+\  
+
+**Formulation**  
+
+TODO  
+
+
+\  
+
+**Algorithm**  
+
+* In order to fit a local linear model around the data point which prediction we want to explain, we need enough data in the surroundings of that data point. In order to achieve that, kernel densities estimations are computed for each variable, then new simulated data points are introduced among the original data points by sampling from the kdes, increasing this way the "density" of the data that was used in the training of the black box. This is specially important with sparse data like our's where _p >> n_, where data points are "far" away from each other making for a poor local model fit.  
+
+The parameter to tune in this step is the number of simulated data points (**n_permutations**).  
+The risk if the parameter is too low, is the high variance of the simulated data each the same prediction is interpreted. If each time the same data point is explained the simulated data is different the variance in the interpretation will be high making the interpretations inconsistent and untrustworthy.  
+
+TODO: no veo inconveniente en incrementar este parametro al maximo hasta que las limitaciones en CPU/memoria lo permitan.  
+
+TODO: Los estimated kernel densities de cada variable no tienen en cuenta las relaciones entre las variables lo cual puede generar data points "irreales". Idea -> aplicar dimensionality reduction y usar multivariate kernel density estimation para generar un data set mas real.  
+
+
+
+\  
+
+* Of data points simulated by sampling from the features kdes, we are specially interested in those in the surroundings to the data point of interest, since we are fitting a local model. So we need to give more weight to data near the instance of interest and this is done with a smoothing exponential kernel. The width of the kernel is a parameter of the LIME model (**kernel_width**) and probably the more tricky one as shown in the following example of a 1-dimensional dataset:  
+
+(image taken from https://christophm.github.io/interpretable-ml-book/lime.html)
+```{r echo=FALSE, out.width = '80%', fig.align="center"}
+knitr::include_graphics("pictures/kernel.png")
+```
+
+In this example changes in the kernel width leads to drastic changes in the local linear fit for the instance of interest (the cross in the plot). Adding more dimensions would increase the sensitivity of the width parameter even more.  
+
+In the _lime_ package the default value is $0.75 \sqrt{p}$. The more number of dimensions for the same number of observations the more space is the data space, that's why the kernel width is increased depending on $p$.  
+The appropriate value seems to depend on the surroundings of the data point being explained so there isn't a clear rule of thumb to follow for this parameter.  
+
+Too small values could lead to insufficient data to fit the local model and too much variance in different interpretations for the same dat point to explain.  
+Too high values could lead to loosing "locality", hence the included data becoming less linear and the explanation of the local model less accurate.  
+
+TODO: Buscar algun criterio, quizas basado en la complejidad (clasificaciones con menos o mas certidumbre) para seleccionar el kernel width.  
+
+TODO: Leer _[2] In high-dimensional data, data points are sparse. Defining a ‘’local neighborhood’’ of the instance of interest may not be straightforward. Importance of the local neighbourhood is presented for example in the article ,,On the Robustness of Interpretability Methods’’ (Alvarez-Melis and Jaakkola 2018). Sometimes even slight changes in the neighbourhood affects strongly obtained explanations._
+
+Another parameter is the distance function that measures the proximity between the instance of interest and the simulated data points. The default option is Gower’s distance but others like Euclidean or Manhattan (see _?dist()_ for details) can also be used.  
+
+TODO: Elegir la funcion mas adecuada teniendo en cuenta:  
+- la alta dimensionalidad  
+- la alta colinearidad  
+- variables no-normales (pero tampoco exponenciales)  
+- las variables han sido standardizadas  
+_[3] It is very unclear whether the distance measure should treat all features equally. Is a distance unit for feature x1 identical to one unit for feature x2? Distance measures are quite arbitrary and distances in different dimensions (aka features) might not be comparable at all._  
+
+\  
+
+* The next step is to feed the black box with the simulated data to get the classifications required to fit the local model.  
+
+\  
+
+* With the simulated data and the corresponding predictions, a linear model is fit. Several options are available (**feature_select**). We'll choose lasso for two reasons: the high-dimensionality of the data and to get a better comparison with the global surrogate lasso model. Lasso will use the weights from the smoothing kernel to give more influence to the the neighborhood to the original observation to be explained.  
+
+\  
+
+* Finally the coefficients with higher absolute values are selected (**n_features**) to explain the output (**n_labels**, _1_ if we are just interested in the selected category).  
+
+
+
+
+
+
+
+\newpage
+
+
+
+
+
+
+## LIME with the original variables
+
+\  
+
+**Picking instances to evaluate the interpretation model.**  
+
+* picking samples that are not close together in the imput space in order to cover different scenarios.  
+
+* picking samples with less certainty in the output - samples that lie within the frontier between different categories are tougher to predict and therefore more intersting to understand.  
+
+* TODO: mirar el metodo propuesto en "4.SUBMODULAR PICK FOR EXPLAINING MODELS" en el paper [1]  
+
+```{r include=FALSE}
 library(lime)
-
-#class(gmodel())
-
-#?model_type
 
 # Setup of lime::model_type()
 model_type.keras.engine.sequential.Sequential <- function(x, ...) {"classification"}
@@ -332,84 +568,435 @@ predict_model.keras.engine.sequential.Sequential <- function (x, newdata, type, 
   pred <- predict(object = x, x = as.matrix(newdata))
   data.frame(BRCA = pred[,1], COAD = pred[,2], KIRC = pred[,3], LUAD = pred[,4], PRAD = pred[,5])
 }
-
-predict_model (x = gmodel, 
-               newdata = as.data.frame(x_train), 
-               type    = 'raw') %>%
-tibble::as_tibble()
-
-# will be used to create hte local model
-explainer <- lime(
-  x = as.data.frame(x_train),
-  model = gmodel, 
-  bin_continuous = FALSE
-)
-
-#class(explainer)
-#summary(explainer)
-
 ```
 
-The predictions of data points of category PRAD are analysed:  
 
-```{r echo=TRUE, message=FALSE, warning=FALSE, fig.width=8, fig.height=8}
-set.seed(1)
-datapoints_index = which(labels[-training_index] == "PRAD")[1:4]
-#datapoints_index = sort(output[,5],index.return=T, decreasing = TRUE)$ix[1:2]
+We'll pick up two observations to explain, one from category _PRAD_ which data points in the PCA plots look like they don't overlap too much with other categories (easy to predict), and another one from category _LUAD_ which data points overlap more with other categories. Each one will be interpreted 4 times to analyse the consistency of the selected features and their weights.  
 
-explanation_PRAD <- lime::explain(
-  x = as.data.frame(x_test)[datapoints_index,],
-  explainer = explainer, 
-  n_permutations = 10000,
-  #dist_fun = "euclidean", #?dist()
-  #kernel_width = 0.75,
-  feature_select = "lasso_path",
-  n_features = 10,
-  n_labels = 1
-)
+As seen in the plots below, the results are very inconsistent - most of the 20 features are different for the same data point. The problem is probably coming from the high-dimensionality of the data, too many features are "competing" to explain the same variance. Depending on the simulated data created in the interpretation, some predictors will prevail over other predictors, even if the change in the simulated data is subtle.  
 
-plot_features(explanation_PRAD)
+The low $R^2$ of the fits ("explanation fit" in the plot) highlights the issue.  
+
+To try to work out this problem we could try to increase the number of simulated data points (default is 5000). However even with 10000 permutations (leading to a 10000*20000 matrix for lasso to fit the line, it takes ages) the problem persists. With more than 10000 permutations I get memory allocation errors.  
+
+TODO: probar con un kernel width mas grande para reducir la varianza en las interpretaciones?  
+
+TODO: idea -> en lugar de depender del smoothing kernel, filtrar del training data que se le pasa al explainer los data points alejados del punto de interes para asi obtener mas densidad alrededor del punto de interes con menos limitaciones en cuanto a CPU/memoria. seria esto distorsionar demasiado la interpretacion?  
+
+TODO: sacar las interpretaciones de todos los data points de una misma categoria y comparar con lime?  
+
+```{r echo=TRUE, fig.height=8, fig.width=8, message=FALSE, warning=FALSE}
+get_instance_explanation <- function(datapoints_index) {
+
+  # the explainer buils the simulated data to fit the local model from the training data and the variable kdes
+  explainer_all <- lime(
+    x = as.data.frame(x_train),
+    model = black_box,
+    use_density = TRUE, # marginal kdes
+    bin_continuous = FALSE
+  )
+
+  lime::explain(
+    x = as.data.frame(x_test)[datapoints_index,],
+    explainer = explainer_all, 
+    n_permutations = 10000,
+    #kernel_width = 0.75,
+    feature_select = "lasso_path",
+    n_features = n_features,
+    n_labels = 1
+  )
+}
+
+# PRAD category
+plot_features(get_instance_explanation(rep(which(cancer[-training_index] == 4)[1],4)))  # training_index was random
+
+# LUAD category
+plot_features(get_instance_explanation(rep(which(cancer[-training_index] == 3)[1],4)))
 ```
+
+
+
+
 
 
 \newpage 
 
 
-**Observations:**  
 
-Each time the LIME model is run, the selected coefficients explaining the outputs are different (unless a seed is set before execution). The reason for this could come from:  
 
-* Not enough number of permutations for the large number of predictors we have (>20000), leading to the "simulated" data to be very different each time for the same data point. I tried increasing _n_permutations_ from 5000 (default) to 25000 but the results keep changing (and not enough RAM - 32 GB - to increase the value more than that; takes very long too).  
 
-* High variance and low correlation between predictors as seen in the PCA analysis. $R^2$ of the local models ("explanation fit" in the LIME plots) is very low for all the data points analysed.  
 
-Different data points for the same category are explained by different predictors too.  
+## LIME with discretized variables
 
 \  
 
-Common genes between Lasso selected predictors and LIME explanation predictors:
+To reduce the variability of the the interpretations, an option is to discretize the data space. This is done in the _lime_ package with the parameter **bin_continuous** set to _true_ and specifying the number of bins for the variable values (quantiles are computed for each variable to segment the distribution in categories - there is no actual order).  
 
-```{r echo=TRUE, message=FALSE}
-# 0 BRCA
-# 1 COAD
-# 2 KIRC
-# 3 LUAD
-# 4 PRAD
+We try again the same samples as before. Some observations:  
 
-# no lasso selected predictor among all the predictors returned by LIME
-lime_feat = as.vector(explanation_PRAD[["feature"]])
-lasso_feat = colnames(x_lasso_test[,coeffs[["4"]]@i])
-intersect(lasso_feat,lime_feat)
+For the PRAD category (doesn't overlap with other categories)  
+* Only a few features are significant (between 1 and 4 in my tests).  
+* The result is more consistent (more common features) than with continuous variables, but still there are some differences.  
+* $R^2$ is high.  
+
+For the LUAD category (overlaps with other categories)  
+* Only one feature is significant.  
+* The dominant feature is the same in all the cases - very consistent.  
+* $R^2$ is very low.  
+
+TODO: explicar por que ocurre lo anterior descrito.  
+
+The interpretation with ranges of values is probably more clear. The discretization of the data in the interpretations will be acceptable depending on the domain, some practitioners using the black box as a tool might not need the level of "granularity" of continuous values and will prefer more "abstract" interpretations.
+
+```{r echo=TRUE, fig.height=8, fig.width=8, message=FALSE, warning=FALSE}
+get_discrete_instance_explanation <- function(datapoints_index, explainer) {
+
+  explanation_all_discrete  = lime::explain(
+    x = as.data.frame(x_test)[datapoints_index,],
+    explainer = explainer, 
+    n_permutations = 10000,
+    #kernel_width = 0.75,
+    feature_select = "lasso_path",
+    n_features = n_features,
+    n_labels = 1
+  )
+}
+
+explainer_all_discrete = lime(
+  x = as.data.frame(x_train),
+  model = black_box,
+  #use_density = TRUE,
+  bin_continuous = TRUE,
+  n_bins = 10
+)
+
+# PRAD category
+plot_features(get_discrete_instance_explanation(rep(which(cancer[-training_index] == 4)[1],4),explainer_all_discrete))
+
+# LUAD category
+plot_features(get_discrete_instance_explanation(rep(which(cancer[-training_index] == 3)[1],4),explainer_all_discrete))
 ```
 
-Reasons for this could be:  
+\  
 
-* A poor LIME model as described above.  
-
-* The more influential genes explaining individual predictions are different from the genes selected by Lasso. Having high variance but non-overlapping categories could lead to this? As a large variety of predictors are able to classify well all the categories, so small differences in the input will change which are the more influential predictors, Lasso only reflecting on "aggregate".  
+TODO: relacion con el modelo lasso global (por el momento me esta dando un error de memoria al crear el modelo lasso global con variables categoricas:)
 
 
 
 
 
+
+\newpage
+
+
+
+
+
+
+## LIME with selected predictors
+
+TODO: Remover predictores que sean colineares. mctest es demasiado lento para tantas dimensiones, incluso con solo 1000 variables le llevaría horas. He probado con forward selection (ver condigo abajo) pero sigue siendo demasiado lento para cubrir todas las variables.  
+TODO: usar elastic net?  
+TODO: calcular cuanto se pierde en la prediccion en el modelo lasso  
+
+```{r echo=TRUE}
+library(mctest)
+
+selected = c(colnames(genes)[1])
+
+#max = ncol(genes)
+max = 10
+
+for (i in 2:max) {
+  print(paste(i,"..."))
+  selected = c(selected, colnames(genes)[i])
+  result = as.data.frame(mctest(genes[,selected], cancer, type="i", method="VIF")[["idiags"]])
+  selected = rownames(result[result$detection == 0,])
+  print(selected)
+}
+```
+
+
+
+
+
+\newpage
+
+
+
+
+
+
+## Interpretable data representation (interpretable variable space)
+
+As we have seen with the data space discretization example, the data representation for the interpretations can be different from the data representation used for in the predictions. We could use whatever is more convenient for the interpretation, as long as we keep a mapping between both data representations.  
+
+A classic example of this are superpixels from images in image classification. A superpixel represents a segment of an image that group pixeles that are interconnected and share similar colors. As opposed to individual pixels, this representation is natural for humans and simplifies the identification of specific regions that could have high influence in the classification of the image. For instance, if a machine learning model classifies the below picture as a goose, it's very likely that the superpixel representing the beak was selected in the LIME interpretation. The simulated data in this case is represented by copies of the original picture where some superpixels are zeroed (set to white), so the local model is able to distinguish between superpixels that have an impact in the classification and those that are less relevant.  
+
+
+
+(image taken from https://pbiecek.github.io/ema/LIME.html)
+```{r echo=FALSE, out.extra='', out.width = '100%', fig.align="center"}
+knitr::include_graphics("pictures/goose_poodle.png")
+```
+
+
+
+
+
+\newpage
+
+
+
+
+
+## Interpretation with clusters of variables
+
+Taking the superpixel example as inspiration we could look for a more abstract data representation easier to undestand that individual variables in our tabular data. In a picture, pixels are correlated by color similarity and by proximity in the spacial axes. In tabular data, variables could be grouped by linear correlation. The interpretable data representation would be then clusters grouping the original variables. An expert in the domain of our prediction model would be able to advise if the representation is useful.  
+
+Clustering could be based on:  
+- correlation of variables regardless the classification  
+- multicollinearity using package mctest  
+- some grouping based on PCA weights  
+- ...  
+
+We'll create 100 clusters based on correlation:  
+
+TODO: hacerlo con con multicolinearidad  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(ClustOfVar)
+#TODO: dig more into this package (hclustvar, ...)
+#TODO: other libraries: corclust
+
+num_clusters = 100
+kmeansvar = kmeansvar(X.quanti = as.matrix(genes), X.quali = as.matrix(as.factor(cancer)), init = num_clusters, iter.max = 10, matsim = FALSE) # nstart = 1, 
+
+clusters = kmeansvar$cluster
+clusters = clusters[1:(length(clusters)-1)]  #X.quali column?
+```
+
+\  
+
+80% of the clusters will be randomly zeroed in each simulated data point in order for the model to find relevant clusters for the classification of the instance of interest.  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# "p is the percentage of non-zeroed clusters to use in each simulated data point
+get_cluster_explanation <- function(datapoint_index, p = 0.2)
+{
+  # the instance of interest to interpret
+  instance = as.data.frame(x_test)[datapoint_index,]
+
+  preprocessing <- function(x) {
+
+    # the instance of interest is replicated n_permutations times
+    toblackbox = instance[rep(1, nrow(x)),]
+
+    # then, 0s are set for all the variables contained in an inactive cluster
+    # (the permutations will randomly active p% of the clusters of each simulated data point)
+    for (i in 1:nrow(x)) {
+  
+      for (k in 1:ncol(x))
+      {
+        if (!x[i,k])
+          toblackbox[i,names(clusters[clusters == k])] = 0
+        
+        # alternatively, variable means instead of 0s (doesn't change the result too much):
+        #vars_in_cluster = names(clusters[clusters == k])
+        #  
+        #if (length(vars_in_cluster) > 1)
+        #  toblackbox[i,names(clusters[clusters == k])] = apply(x_train[,vars_in_cluster], 2, mean)
+        #else
+        #  toblackbox[i,names(clusters[clusters == k])] = mean(x_train[,vars_in_cluster])
+      }
+    }
+
+    as.matrix(toblackbox)
+  }
+
+  # 
+  sim_dist = as.data.frame(matrix(FALSE, nrow = 100, ncol = num_clusters))
+  sim_dist[1:round(p*100),] = TRUE
+  
+  for (i in 1:num_clusters)
+    colnames(sim_dist)[i] = as.character(sprintf("cluster_%s",i))
+  
+  explainer_cluster <- lime(
+    x = as.data.frame(sim_dist),
+    model = black_box,
+    use_density = TRUE,
+    preprocess = preprocessing,
+  )
+  
+  # vector of active clusters (all 1s for the instance of interest)
+  all_ones = as.data.frame(matrix(TRUE, nrow = 1, ncol = num_clusters))
+  for (i in 1:num_clusters)
+    colnames(all_ones)[i] = as.character(sprintf("cluster_%s",i))
+  
+  lime::explain(
+    x = all_ones,
+    explainer = explainer_cluster, 
+    n_permutations = 500,
+    #kernel_width = 0.75,
+    feature_select = "lasso_path",
+    n_features = n_features,
+    n_labels = 1
+  )
+}
+
+# PRAD category
+plot_features(get_cluster_explanation(which(cancer[-training_index] == 4)[1]))
+
+# LUAD category
+plot_features(get_cluster_explanation(which(cancer[-training_index] == 3)[1]))
+```
+
+
+
+
+
+
+
+\newpage
+
+
+
+
+
+
+## Interpretation with PCA
+
+Another way to get a more interpetable data representation would be through dimension reduction like PCA. Again, the expert in the domain has to advise if the representation would be useful for the interpretation. The expert might be able to understand the meaning of some of the components.  
+
+
+The training data is compressed (interpretation data representation):  
+TODO: calcular cuanta informacion se pierde. Calculo que poco.
+
+```{r echo=TRUE}
+x_train_pca = prcomp(x_train)
+```
+
+And decompressed (prediction data representation) to feed the black box (see _preprocessing_ function below).  
+
+We try again for categories PRAD and LUAD (same data points 4 times) with the first 100 more important PCA components. The results are consistent and $R^2$ is high on both categories.  
+
+PC3 is the dominant feature for category PRAD, PC5 for category LUAD.
+
+```{r echo=TRUE, fig.width=8, fig.height=8}
+# "pcs_n" is the number of pcs to use in the interpretable data representation
+get_PCA_explanation <- function(datapoints_index, pcs_n, n_permutations)
+{
+  preprocessing <- function(x){
+  
+    # reversing PCA (with the remaining info) to feed the black box
+    a = as.matrix(x) %*% t(x_train_pca$rotation[,1:pcs_n])
+    b = t(a) + x_train_pca$center[1:pcs_n]
+    t(b)
+  }
+  
+  explainer_PCA <- lime(
+    x = as.data.frame(x_train_pca$x)[,1:pcs_n],
+    model = black_box,
+    use_density = TRUE,
+    preprocess = preprocessing,
+    bin_continuous = FALSE
+  )
+
+  lime::explain(
+    # converting test data point coordinates to the PCA space:
+    x = as.data.frame(x_test[datapoints_index,] %*% x_train_pca$rotation[,1:pcs_n]),
+    explainer = explainer_PCA, 
+    n_permutations = n_permutations,
+    #kernel_width = 0.75,
+    feature_select = "lasso_path",
+    n_features = n_features,
+    n_labels = 1
+  )
+}
+
+# PRAD category
+plot_features(get_PCA_explanation(rep(which(cancer[-training_index] == 4)[1],4),100,5000))
+
+# LUAD category
+plot_features(get_PCA_explanation(rep(which(cancer[-training_index] == 3)[1],4),100,5000))
+```
+
+\  
+
+We can also check the correlation between the PCA version of the global surrogate model and the local lime models (with 1000 permutations) for all the test data points in category LUAD. It looks there is slightly more correlation between the global surrogate model and the interpretations which could be seen as generalization:
+
+```{r include=FALSE}
+gc()
+surrogate_pca = glmnet(x_train_pca$x, cancer[training_index], alpha = 1, family = "multinomial", nlambda=300) #lambda.min.ratio=0.001
+surrogate_pca_features = get_surrogate_features(surrogate_pca, n_features)
+```
+
+```{r echo=FALSE}
+category = 3
+datapoints_index = which(cancer[-training_index] == category)
+explanation_PCA = get_PCA_explanation(datapoints_index,100,1000)
+
+explanation_PCA_cases = tidyr::nest(explanation_PCA, key = -case)
+surrogate_pca_features_names = names(surrogate_pca_features$coeffs[[as.character(category)]])
+
+pca_features_names = surrogate_pca_features_names
+for (i in 1:nrow(explanation_PCA_cases))
+  pca_features_names = Reduce(union,c(pca_features_names,explanation_PCA_cases[[2]][[i]]$feature))
+
+coeffs = data.frame()
+
+for (i in 1:length(surrogate_pca_features_names))
+  coeffs[1,surrogate_pca_features_names[i]] = surrogate_pca_features$coeffs[[as.character(category)]][i]
+
+coeffs_names = c("global")
+
+for (i in 1:nrow(explanation_PCA_cases)) {
+  
+  g = explanation_PCA_cases[[2]][[i]]
+  
+  for (j in 1:length(g$feature)) coeffs[i+1,g$feature[j]] = g$feature_weight[j]
+  
+  coeffs_names = c(coeffs_names, paste("lime",explanation_PCA_cases$case[i]))
+}
+
+rownames(coeffs) = coeffs_names
+coeffs[is.na(coeffs)] = 0
+
+library(wordspace)
+coeffs = normalize.rows(as.matrix(coeffs))
+
+models_m = t(as.matrix(coeffs))
+library(corrplot)
+corrplot(cor(models_m),is.corr=T)
+```
+
+
+
+
+
+
+
+
+
+\newpage 
+
+
+
+
+
+
+
+## References
+
+[1] Ribeiro, Marco Tulio, Sameer Singh, and Carlos Guestrin. 2016. “Why Should I Trust You?: Explaining the Predictions of Any Classifier.” In Proceedings of the 22nd Acm Sigkdd International Conference on Knowledge Discovery and Data Mining, 1135–44. ACM.
+
+[2] Przemyslaw Biecek and Tomasz Burzykowski. 2020. “Explanatory Model Analysis: Explore, Explain and Examine Predictive Models.” E-Book At< https://pbiecek.github.io/ema/>.
+
+[3] Molnar, Christoph, and others. 2018. “Interpretable Machine Learning: A Guide for Making Black Box Models Explainable.” E-Book At< Https://Christophm.github.io/Interpretable-Ml-Book/>.
+
+LIME Python code:  
+https://github.com/marcotcr/lime
+
+Port in R:  
+https://github.com/thomasp85/lime
 
