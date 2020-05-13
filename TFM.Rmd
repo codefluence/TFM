@@ -800,7 +800,7 @@ library(ClustOfVar)
 #TODO: other libraries: corclust
 
 num_clusters = 100
-kmeansvar = kmeansvar(X.quanti = as.matrix(genes), X.quali = as.matrix(as.factor(cancer)), init = num_clusters, iter.max = 5, matsim = FALSE) # nstart = 1, 
+kmeansvar = kmeansvar(X.quanti = as.matrix(genes), X.quali = as.matrix(as.factor(cancer)), init = num_clusters, iter.max = 1, matsim = FALSE) # nstart = 1, 
 
 clusters = kmeansvar$cluster
 clusters = clusters[1:(length(clusters)-1)]  #X.quali column?
@@ -875,10 +875,10 @@ get_cluster_explanation <- function(datapoint_index, p = 0.2)
 }
 
 # PRAD category
-plot_features(get_cluster_explanation(which(cancer[-training_index] == 4)[1]))
+#plot_features(get_cluster_explanation(which(cancer[-training_index] == 4)[1]))
 
 # LUAD category
-plot_features(get_cluster_explanation(which(cancer[-training_index] == 3)[1]))
+#plot_features(get_cluster_explanation(which(cancer[-training_index] == 3)[1]))
 ```
 
 
@@ -974,10 +974,10 @@ The results are:
 
 ```{r echo=TRUE, fig.width=8, fig.height=8}
 # PRAD category
-plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 4)[1],4),5000))
+#plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 4)[1],4),5000))
 
 # LUAD category
-plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000))
+#plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000))
 ```
 
 ```{r eval=FALSE, fig.height=8, fig.width=8, include=FALSE}
@@ -1018,7 +1018,7 @@ for (i in 0:4){
 rownames(coeffs_pca_sur) = paste(levels(labels),"(global)")
 coeffs_pca_sur[is.na(coeffs_pca_sur)] = 0
 
-print(coeffs_pca_sur[,colSums(coeffs_pca_sur) != 0])
+print(coeffs_pca_sur[,colSums(coeffs_pca_sur) != 0][,1:5])
 ```
 
 \  
@@ -1026,15 +1026,15 @@ print(coeffs_pca_sur[,colSums(coeffs_pca_sur) != 0])
 The lime local models are fitted for all the observations in categories LUAD and PRAD (more than 100 each) and using 3000 permutations for each interpretation.  
 
 ```{r message=FALSE, warning=FALSE, include=FALSE}
-get_category_coeffs <- function(category)
+get_category_coeffs <- function(category, n_permutations = 2000)
 {
   datapoints_index = which(cancer[training_index] == category)
   
-  explanation_PCA = get_PCA_explanation(datapoints_index[1],3000)
+  explanation_PCA = get_PCA_explanation(datapoints_index[1],n_permutations)
   
   for (i in 2:length(datapoints_index))
   {
-    temp = get_PCA_explanation(datapoints_index[i],3000)
+    temp = get_PCA_explanation(datapoints_index[i],n_permutations)
     temp$case = i
     explanation_PCA = rbind(explanation_PCA, temp)
   }
@@ -1060,13 +1060,16 @@ get_category_coeffs <- function(category)
   coeffs_cat
 }
 
+coeffs_BRCA = get_category_coeffs(0)
+coeffs_COAD = get_category_coeffs(1)
+coeffs_KIRC = get_category_coeffs(2)
 coeffs_LUAD = get_category_coeffs(3)
 coeffs_PRAD = get_category_coeffs(4)
 ```
 
 ```{r echo=FALSE}
-print(coeffs_LUAD[1:10,colSums(coeffs_LUAD) != 0])
-print(coeffs_PRAD[1:10,colSums(coeffs_PRAD) != 0])
+print(coeffs_LUAD[1:10,colSums(coeffs_LUAD) != 0][,1:5])
+print(coeffs_PRAD[1:10,colSums(coeffs_PRAD) != 0][,1:5])
 ```
 
 \  
@@ -1076,15 +1079,28 @@ In order to compare the global lasso model with the lime models, the coefficient
 To decide which statistic to use we analyse the more influential features for each category. To measure the influence we use the sum of the absolute values of the coefficients of all the observations for each component:  
 
 ```{r echo=FALSE}
+abs_sums_BRCA = apply(abs(coeffs_BRCA), 2, sum)
+infl_comp_BRCA = sort(abs_sums_BRCA, decreasing = TRUE)[1:16]
+cat("\nsum of the absoulte values of the coefficients for BRCA:\n")
+round(infl_comp_BRCA,5)
+
+abs_sums_COAD = apply(abs(coeffs_COAD), 2, sum)
+infl_comp_COAD = sort(abs_sums_COAD, decreasing = TRUE)[1:16]
+cat("\nsum of the absoulte values of the coefficients for COAD:\n")
+round(infl_comp_COAD,5)
+
+abs_sums_KIRC = apply(abs(coeffs_KIRC), 2, sum)
+infl_comp_KIRC = sort(abs_sums_KIRC, decreasing = TRUE)[1:16]
+cat("\nsum of the absoulte values of the coefficients for KIRC:\n")
+round(infl_comp_KIRC,5)
+
 abs_sums_PRAD = apply(abs(coeffs_PRAD), 2, sum)
 infl_comp_PRAD = sort(abs_sums_PRAD, decreasing = TRUE)[1:16]
-
-abs_sums_LUAD = apply(abs(coeffs_LUAD), 2, sum)
-infl_comp_LUAD = sort(abs_sums_LUAD, decreasing = TRUE)[1:16]
-
 cat("\nsum of the absoulte values of the coefficients for PRAD:\n")
 round(infl_comp_PRAD,5)
 
+abs_sums_LUAD = apply(abs(coeffs_LUAD), 2, sum)
+infl_comp_LUAD = sort(abs_sums_LUAD, decreasing = TRUE)[1:16]
 cat("\nsum of the absoulte values of the coefficients for LUAD:\n")
 round(infl_comp_LUAD,5)
 ```
@@ -1098,38 +1114,30 @@ library(tidyr)
 library(purrr)
 library(ggplot2)
 
-means_PRAD = apply(coeffs_PRAD, 2, mean)
-medians_PRAD = apply(coeffs_PRAD, 2, median)
-key_PRAD = names(infl_comp_PRAD)[1:16]
+print_distributions <- function(co, infl, le)
+{
+  means = apply(co, 2, mean)
+  medians = apply(co, 2, median)
+  key = names(infl)[1:16]
 
-coeffs_PRAD[,key_PRAD] %>%
+  co[,key] %>%
   keep(is.numeric) %>% 
-  gather(key_PRAD) %>% 
+  gather(key) %>% 
   ggplot(aes(value)) +
-  facet_wrap(~ factor(key_PRAD, levels=names(infl_comp_PRAD)[1:16]), scales = "free") + 
+  facet_wrap(~ factor(key, levels=names(infl)[1:16]), scales = "free") + 
   geom_density() + 
   geom_rug(colour="red") +
-  geom_vline(xintercept=means_PRAD[key_PRAD], size=0.5, color="red") + 
-  geom_vline(xintercept=medians_PRAD[key_PRAD], size=0.5, color="blue") + 
-  ggtitle("16 more influential components for PRAD classification") + 
+  geom_vline(xintercept=means[key], size=0.5, color="red") + 
+  geom_vline(xintercept=medians[key], size=0.5, color="blue") + 
+  ggtitle(sprintf("16 more influential components for %s classification",le)) + 
   theme(plot.title = element_text(hjust = 0.5))
+}
 
-
-means_LUAD = apply(coeffs_LUAD, 2, mean)
-medians_LUAD = apply(coeffs_LUAD, 2, median)
-key_LUAD = names(infl_comp_LUAD)[1:16]
-
-coeffs_LUAD[,key_LUAD] %>%
-  keep(is.numeric) %>% 
-  gather(key_LUAD) %>% 
-  ggplot(aes(value)) +
-  facet_wrap(~ factor(key_LUAD, levels=names(infl_comp_LUAD)[1:16]), scales = "free") + 
-  geom_density() + 
-  geom_rug(colour="red") + 
-  geom_vline(xintercept=means_LUAD[key_LUAD], size=0.5, color="red") + 
-  geom_vline(xintercept=medians_LUAD[key_LUAD], size=0.5, color="blue") + 
-  ggtitle("16 more influential components for LUAD classification") + 
-  theme(plot.title = element_text(hjust = 0.5))
+print_distributions(coeffs_BRCA,infl_comp_BRCA,"BRCA")
+print_distributions(coeffs_COAD,infl_comp_COAD,"COAD")
+print_distributions(coeffs_KIRC,infl_comp_KIRC,"KIRC")
+print_distributions(coeffs_LUAD,infl_comp_LUAD,"LUAD")
+print_distributions(coeffs_PRAD,infl_comp_PRAD,"PRAD")
 ```
 
 \  
@@ -1142,10 +1150,10 @@ Also note that the variance of the coefficients for the more dominant components
 
 ```{r echo=FALSE}
 cat("\nstandard deviation of first 3 more influential component coefficients for PRAD:\n")
-round(apply(coeffs_PRAD[,key_PRAD[1:3]], 2, sd),5)
+round(apply(coeffs_PRAD[,names(infl_comp_PRAD)[1:3]], 2, sd),5)
 
 cat("\n\nstandard deviation of first 3 more influential component coefficients for LUAD:\n")
-round(apply(coeffs_LUAD[,key_LUAD[1:3]], 2, sd),5)
+round(apply(coeffs_LUAD[,names(infl_comp_LUAD)[1:3]], 2, sd),5)
 ```
 
 \  
@@ -1156,11 +1164,14 @@ We compute a single set of coefficients for each category using the median of th
 fun = median
 
 coeffs_pca = t(as.matrix(coeffs_pca_sur))
+coeffs_pca = cbind(coeffs_pca,apply(coeffs_BRCA, 2, fun))
+coeffs_pca = cbind(coeffs_pca,apply(coeffs_COAD, 2, fun))
+coeffs_pca = cbind(coeffs_pca,apply(coeffs_KIRC, 2, fun))
 coeffs_pca = cbind(coeffs_pca,apply(coeffs_LUAD, 2, fun))
 coeffs_pca = cbind(coeffs_pca,apply(coeffs_PRAD, 2, fun))
 
-coeffs_pca = coeffs_pca[,c(4,6,5,7)]
-colnames(coeffs_pca) = c("LUAD  (global)", "LUAD (lime)", "PRAD (global)", "PRAD (lime)")
+coeffs_pca = coeffs_pca[,c(1,6,2,7,3,8,4,9,5,10)]
+colnames(coeffs_pca) = c("BRCA (global)", "BRCA (lime)", "COAD (global)", "COAD (lime)", "KIRC (global)", "KIRC (lime)", "LUAD  (global)", "LUAD (lime)", "PRAD (global)", "PRAD (lime)")
 
 # removing rows with all 0s
 coeffs_pca = coeffs_pca[rowSums(coeffs_pca) != 0,]
@@ -1177,7 +1188,7 @@ library(unikn)
 library(gplots)
 my_palette <- c(colorRampPalette(c("red","white"))(n = 99), "white", colorRampPalette(c("white","blue"))(n = 99))
 heatmap.2(coeffs_pca, col= my_palette, breaks=col_breaks, symkey=FALSE, key=TRUE, Rowv=NA, Colv=NA,
-          offsetCol = -53, srtCol=45, cexCol=1.2, adjCol = c(0,1))
+          offsetCol = -60, srtCol=45, cexCol=1.2, adjCol = c(0,1))
 ```
 
 We can see there is high correlation, specially for category LUAD.  
