@@ -58,6 +58,7 @@ TODO: buscar un dataset similar pero que contenga tambien pacientes sanos.
 
 
 
+
 \newpage  
 
 
@@ -225,6 +226,7 @@ pairs(genes_pca$x[,1:4], pch=19, col=genes_colours)
 
 
 
+
 \newpage
 
 
@@ -232,11 +234,12 @@ pairs(genes_pca$x[,1:4], pch=19, col=genes_colours)
 
 
 
-## Fully connected network
+
+## Predictions with a fully connected network
 
 \  
 
-A fully connected network is trained with 80% of the data:
+A fully connected network is trained with 80% of the data:  
 
 ```{r include=FALSE}
 library(keras)
@@ -277,16 +280,13 @@ plot(black_box_history)
 
 \  
 
-The accuracy of the network is close to 1 (sometimes 1 depending on the random initialization of the network):
+The accuracy of the network is close to 1 (sometimes 1 depending on the random initialization of the network):  
 
 ```{r echo=FALSE, message=FALSE, warning=FALSE}
-black_box_pred = black_box %>% predict(x_test)
+black_box_test_pred = black_box %>% predict(x_test)
 black_box %>% evaluate(x_test, y_test)
 ```
 
-\  
-
-Neural networks use to be power prediction tools but they come with a cost in terms of interpretability of the predictions. They contain a huge number of parameters making difficult the identification of features that are influential in the response of the model.
 
 
 
@@ -304,25 +304,53 @@ Neural networks use to be power prediction tools but they come with a cost in te
 
 
 
-## Surrogate model
+
+## Global interpretation with a surrogate model
 
 \  
 
-To tackle the interpretability issue of the prediction model (which we'll call _black box_ from now on), a surrogate interpretable model is fitted in parallel. This surrogate model will help us to undestand the relationship between the features and the response at a global level (i.e. for no particular prediction).  
+Neural networks use to be powerful prediction tools but they come with a cost in terms of interpretability of the predictions. They contain a huge number of parameters making difficult the identification of features that are influential in the response of the model.  
 
-Lasso will be the model of choice, as it performs feature selection efficiently for high-dimensional data and it's very easy to understand.  
+To tackle the interpretability issue of the prediction model (which we'll call _black box_ from now on), a surrogate interpretable model will be fitted in parallel with the training data that was used to fit the black box. This surrogate model will help us to undestand the relationship between the features and the response at a global level (i.e. for no particular prediction).  
 
-Because the purpose of this model is interpretation, we'll add a parameter on top of lasso to select the number of features we want to interpret the black box model. We'll fit several models with different lambdas and pick the one with the desired number of selected features. This is done for each category. With a fixed number of features we'll be able to fairly compare the surrogate model with other models with the same number of features as we'll see later with LIME.  
+For the interpretable surrogate model we'll use lasso regularization, as it performs feature selection efficiently for high-dimensional data and it's very easy to understand.  
 
-20 features are selected (about 0.05% of the total features).  
+\newpage
 
-```{r echo=TRUE, fig.height=4, fig.width=4, message=FALSE, warning=FALSE}
-library(glmnet)
+The data representation for the interpretations can be different from the data representation used in the predictions. We could use whatever is more convenient for the interpretation, as long as we keep a mapping between both data representations.  
 
-# this function looks for a lasso model with n_features selected for each category
-# (if possible, it will depend on the lambda grid)
-get_surrogate_features <- function(surrogate, n_features){
+To get a more interpretable data representation, we do dimension reduction with PCA. This also will help with the high variance issue. The expert in the domain has to advise if the representation would be useful for interpretation. The expert might be able to understand the meaning of the main components.  
 
+The number of components in the interpretable data representation could be reduced to a percentage of the explained variance, since probably only a few dozens of them will be really influencial. We'll start with the first 100 PCs for now.  
+
+```{r echo=FALSE, fig.align="center", fig.height=4, fig.width=6}
+#TODO: debemos hacer scale otra vez de solo con el training data antes de PCA??
+
+x_train_pca = prcomp(x_train)
+colnames(x_train_pca$x) = c("PC01","PC02","PC03","PC04","PC05","PC06","PC07","PC08","PC09",colnames(x_train_pca$x[,10:ncol(x_train_pca$x)]))
+colnames(x_train_pca$rotation) = c("PC01","PC02","PC03","PC04","PC05","PC06","PC07","PC08","PC09",colnames(x_train_pca$rotation[,10:ncol(x_train_pca$rotation)]))
+
+genes_eigenvalues = get_eigenvalue(x_train_pca)
+plot(1:nrow(x_train), genes_eigenvalues$cumulative.variance.percent, xlab = "number of PCs", ylab = "cumulative variance %", type = "l")
+
+# The number of pcs to use in the interpretable data representation:
+pcs_n = 100
+```
+
+\  
+
+Because the purpose of this model is interpretation, we'll add a parameter on top of lasso to select the number of features we want to interpret the black box model. We'll fit several models with different lambdas and pick the lambda with the desired number of selected features (or close to that number, it will depend on the given lambda range). This is done for each category. With a fixed number of features we'll be able to fairly compare the surrogate model with other models with the same number of features as we'll see later with LIME.  
+
+In addition, the output in the lasso fitting won't be the predicted categories but the predicted probabilities, so we can better understand how the black box makes predictions.  
+
+The 10 more influential features will be selected.  
+
+```{r include=FALSE}
+n_features = 10
+black_box_train_pred = black_box %>% predict(x_train)
+
+# !!!!! Multionomial lasso model only using predicted labels - NOT USED to get the coefficients !!!!!
+get_lasso_coeffs <- function(surrogate, n_features){
   surrogate_coeffs = coef(surrogate)
   
   coeffs = vector(mode = "list", length = 5)
@@ -344,97 +372,117 @@ get_surrogate_features <- function(surrogate, n_features){
     index[[as.character(i)]] = which(has_value[, lambda_index])
     coeffs[[as.character(i)]] = lasso_sparse[which(has_value[, lambda_index])+1,lambda_index]
     lambda[[as.character(i)]] = surrogate[["lambda"]][lambda_index]
-    
-    #TODO: this is from the lime package
-    #fit <- glmnet(x_train[,index[[as.character(i)]]], cancer[training_index], alpha = 0, lambda = 2 / length(cancer[training_index]))
-    #r2 <- fit$dev.ratio
-    #fff <- coef(fit)[-1, 1]
-    #print(fff)
-    #coeffs[[as.character(i)]] = fff#fit$beta@x
-    #names(coeffs[[as.character(i)]]) = names(index[[as.character(i)]])
   }
-  
+    
   list(index = index, coeffs = coeffs, lambda = lambda)
 }
 
-n_features = 10
-surrogate = glmnet(x_train, cancer[training_index], alpha = 1, family = "multinomial", nlambda=300, lambda.min.ratio=0.001)
-surrogate_features = get_surrogate_features(surrogate, n_features)
+surrogate_lasso_pca = glmnet(x_train_pca$x[,1:pcs_n], cancer[training_index], alpha = 1, family = "multinomial", nlambda=300, lambda.min.ratio=0.00001)
+surrogate_lasso_coeffs = get_lasso_coeffs(surrogate_lasso_pca, n_features)
 
-plot(surrogate, xvar="lambda", label = TRUE, xlim=c(-8,-1))
+coeffs_pca_lasso = setNames(data.frame(matrix(ncol = pcs_n, nrow = 0)), as.vector(sprintf("PC%i",1:pcs_n)))
+colnames(coeffs_pca_lasso) = c("PC01","PC02","PC03","PC04","PC05","PC06","PC07","PC08","PC09",colnames(coeffs_pca_lasso[,10:ncol(coeffs_pca_lasso)]))
+
+for (i in 0:4){
+
+  lop = surrogate_lasso_coeffs[["coeffs"]][[as.character(i)]]
+
+  for (j in 1:(length(lop)))
+    coeffs_pca_lasso[i+1,names(lop)[j]] = lop[j]
+}
+
+rownames(coeffs_pca_lasso) = levels(labels)
+coeffs_pca_lasso[is.na(coeffs_pca_lasso)] = 0
 ```
 
-\  
 
-The plots above show the coefficient values for the selected features for each category. The higher the absolute value, the higher the influence (globally) in the output.  
 
-Because the number of features is fixed, the selected value for lambda is not optimal for the fitting. Not a problem since the accuracy of the Lasso model is close to 1 with the test data:  
-TODO: que pasa si el accuracy es mucho peor que el accuracy del black box model?  
 
-```{r echo=TRUE}
-# Each category has a different lambda. Here we use the smallest one for all the categories.
-min_lambda = min(as.numeric(surrogate_features$lambda))
-surrogate_test = predict(surrogate, newx = x_test, s = min_lambda, type="response")
-surrogate_pred = max.col(as.data.frame(surrogate_test))-1
-
-mean(cancer[-training_index] == surrogate_pred)
-```
-
-\  
-
-Loss:
-
-```{r echo=TRUE}
-label_output_prob = apply(surrogate_test[,,1],1,max) * as.integer(as.integer(cancer[-training_index]) == surrogate_pred)
-1 - mean(label_output_prob)
-```
 
 \newpage
 
-Lasso coefficients heatmap:
 
-```{r echo=FALSE, fig.height=8, fig.width=8, message=FALSE, warning=FALSE}
-for(i in 1:nrow(coeff_matrix)){
-  for(j in 1:ncol(coeff_matrix)){
-    coeff_matrix[i,j] <- ifelse(coeff_matrix[i,j] < 0, -1,
-                                ifelse(coeff_matrix[i,j] > 0, 1, 0))
+
+
+
+Heatmap showing the more influential genes (selected by the lasso with optimal lambda):  
+
+```{r echo=FALSE, fig.height=8, fig.width=5, message=FALSE, warning=FALSE}
+library(glmnet)
+
+generate_histo <- function()
+{
+  sparse = t(coeffs_pca_lasso)
+  coeff_matrix = sparse[rowSums(sparse) != 0,] #removing rows with all surrogate_coeffs set to 0
+  
+  for(i in 1:nrow(coeff_matrix)){
+    for(j in 1:ncol(coeff_matrix)){
+      coeff_matrix[i,j] <- ifelse(coeff_matrix[i,j] < 0, -1,
+                                  ifelse(coeff_matrix[i,j] > 0, 1, 0))
+    }
   }
+  
+  # Melt de hat_betas_fd + factores
+  library(reshape)
+  to_plot <- coeff_matrix
+  colnames(to_plot)  <- colnames(sparse)
+  aux <- c()
+  for(j in 1:ncol(coeff_matrix)){ # "Truco ordenación"
+    aux <- c(aux, which(to_plot[,j]!=0))
+  }
+  aux <- rownames(to_plot)[aux]
+  aux <- unique(aux)
+  to_plot2 <- melt(to_plot)
+  colnames(to_plot2) <- c("PC","category","value")
+  to_plot2$PC <- factor(to_plot2$PC, levels = aux)
+  to_plot2$category <- factor(to_plot2$category)
+  to_plot2$value <- factor(to_plot2$value, levels = c(-1, 0, 1))  
+  
+  to_plot2$PC = as.character(to_plot2$PC)
+  to_plot2 = to_plot2[order(to_plot2$PC),]
+  to_plot2$PC = as.factor(to_plot2$PC)
+  
+  to_plot2
 }
-
-# Melt de hat_betas_fd + factores
-library(reshape)
-to_plot <- coeff_matrix
-colnames(to_plot)  <- colnames(sparse)
-aux <- c()
-for(j in 1:ncol(coeff_matrix)){ # "Truco ordenación"
-  aux <- c(aux, which(to_plot[,j]!=0))
-}
-aux <- rownames(to_plot)[aux]
-aux <- unique(aux)
-to_plot2 <- melt(to_plot)
-colnames(to_plot2) <- c("gene","category","value")
-to_plot2$gene <- factor(to_plot2$gene, levels = aux)
-to_plot2$category <- factor(to_plot2$category)
-to_plot2$value <- factor(to_plot2$value, levels = c(-1, 0, 1))
 
 # Heatmap
 library(ggplot2)
-ggplot(to_plot2, aes(x = category, y = gene, fill = value)) + 
+
+ggplot(generate_histo(), aes(x = category, y = PC, fill = value)) + 
   geom_tile() +
-  scale_fill_manual(values = c("red", "white", "blue")) +
+  scale_fill_manual(values = c("brown1", "white", "dodgerblue")) +
   theme(axis.text.y = element_text(color="black", size=8),
         axis.ticks.y.left = element_blank())
 ```
 
 \  
 
-The variables selected by lasso give a global sense of the more influential predictors in driving the model, however if the data is complex, in some regions of the data space the variables explaning the classifications could be completely different to the ones selected by the surrogate model.  
+The genes selected by the lasso give a global sense of the more influential features in driving the model. However a potential issue with high-dimensional data is the high variance in the interpretations, depending on the selected observation the influential genes will be completely different even for the same category, specially in regions of the data space that are complex (non-linear).  
+
+\  
+
+TODO: volver a traer the classification loss funtion
+
+The plots above show the coefficients of the selected features for each category. The higher the absolute value, the higher the influence (globally) in the output.  
+
+$R^2$ values are high for all the categories, but the big assumption here is that the data is linear.  
+
+The vertical lines represent the computed lambdas 10 features (or close to 10 features). Because the number of features is fixed, the selected values for lambda are not optimal for the fitting. Not a problem since the MSE is very low for all the categories.  
+
+TODO: que pasa si el accuracy/MSE es mucho peor que el accuracy/MSE del black box model?  
 
 
 
 
 
-\newpage 
+
+
+
+
+
+\newpage
+
+
 
 
 
@@ -444,7 +492,6 @@ The variables selected by lasso give a global sense of the more influential pred
 
 
 ## LIME
-
 
 
 \  
@@ -522,25 +569,6 @@ TODO: Elegir la funcion mas adecuada teniendo en cuenta:
 
 
 
-\newpage
-
-
-
-
-
-
-## Interpretable data representation
-
-The data representation for the interpretations can be different from the data representation used in the predictions. We could use whatever is more convenient for the interpretation, as long as we keep a mapping between both data representations.  
-
-A classic example of this are superpixels in the field of image classification. A superpixel represents a segment of an image that group pixeles that are interconnected and share similar colors. As opposed to individual pixels, this representation is natural for humans and simplifies the identification of specific regions that could have high influence in the classification of an image. For instance, if a machine learning model classifies the below picture as a goose, it's very likely that the superpixel representing the beak is selected in the LIME interpretation. The simulated data in this case consists in copies of the original picture where some superpixels are zeroed (set to white), so the local model is able to distinguish between superpixels that have an impact in the classification and those that are less relevant.  
-
-(image taken from https://pbiecek.github.io/ema/LIME.html)
-```{r echo=FALSE, out.extra='', out.width = '100%', fig.align="center"}
-knitr::include_graphics("pictures_1/goose_poodle.png")
-```
-
-
 
 
 
@@ -554,31 +582,28 @@ knitr::include_graphics("pictures_1/goose_poodle.png")
 
 ## Interpretation with PCA
 
-Another way to get a more interpetable data representation would be through dimension reduction like PCA. Again, the expert in the domain has to advise if the representation would be useful for interpretation. The expert might be able to understand the meaning of the main components.  
+Let's use LIME to make interpretations of the predictions of individual observations in the training data with PCA reduction.  
 
-For a fair comparison with the global surrogate lasso model, we'll do interpretations with lime of observations in the training data.  
-The number of components in the interpretable data representation could be reduced to explain a percentage of the explained variance, since probably only a few dozens of them will be really influencial. We'll start with the first 100 PCs for now.  
-
-```{r echo=FALSE, fig.align="center", fig.height=4, fig.width=6}
-x_train_pca = prcomp(x_train)
-
-genes_eigenvalues = get_eigenvalue(x_train_pca)
-plot(1:nrow(x_train), genes_eigenvalues$cumulative.variance.percent, xlab = "number of PCs", ylab = "cumulative variance %", type = "l")
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(lime)
+# Setup of lime::model_type()
+model_type.keras.engine.sequential.Sequential <- function(x, ...) {"classification"}
+# Setup of lime::predict_model()
+predict_model.keras.engine.sequential.Sequential <- function (x, newdata, type, ...) {
+  pred <- predict(object = x, x = as.matrix(newdata))
+  data.frame(BRCA = pred[,1], COAD = pred[,2], KIRC = pred[,3], LUAD = pred[,4], PRAD = pred[,5])
+}
 ```
 
-\  
+```{r echo=TRUE, fig.height=8, fig.width=8, message=FALSE, warning=FALSE}
 
-The black box only understands data as represented originally with individual gene expressions (the optimal representation for prediction rather than PCA which destroys information), therefore the simulated data in PCA format has to be converted back to the original format in order to get predictions (see _preprocessing_ function below).  
+#TODO: debo restar el mean en el data point que se pasa a lime::explain?
 
-```{r echo=TRUE, fig.height=8, fig.width=8, warning=FALSE}
-# The number of pcs to use in the interpretable data representation:
-pcs_n = 100
-
-get_PCA_explanation <- function(datapoints_index, n_permutations = 2000, kernel_width = 0.75)
+get_PCA_explanation <- function(datapoints_index, n_permutations = 200, kernel_width = 0.75)
 {
   preprocessing <- function(x){
   
-    # reversing PCA (with the remaining info) to feed the black box which only understands individual genes
+    # reversing PCA (with the remaining info) to feed the black box which only understands the original data - individual genes
     a = as.matrix(x) %*% t(x_train_pca$rotation[,1:pcs_n])
     b = t(a) + x_train_pca$center
     t(b)
@@ -593,11 +618,11 @@ get_PCA_explanation <- function(datapoints_index, n_permutations = 2000, kernel_
   )
 
   lime::explain(
-    # converting test data point coordinates to the PCA space:
+    # converting train data coordinates to the PCA space:
     x = as.data.frame(x_train[datapoints_index,] %*% x_train_pca$rotation[,1:pcs_n]),
     explainer = explainer_PCA, 
     n_permutations = n_permutations,
-    kernel_width = kernel_width,
+    #kernel_width = kernel_width,
     feature_select = "lasso_path",
     n_features = 10,
     n_labels = 1
@@ -617,125 +642,49 @@ reverse_pca = prcomp(reverse)
 par(mfrow=c(1,2))
 plot(genes_pca$x[,7:8], pch=19, col=genes_colours)
 plot(reverse_pca$x[,7:8], pch=19, col=genes_colours)
+par(mfrow=c(1,1))
 ```
 
 \  
 
-We analyse the interpretation of an observation of category PRAD (this category barely overlaps with other categories), and we try the interpretation of another observation of category LUAD (this category overlaps with other categories as seen in the PCA plots).  
-For both observations the process is run 4 times to check the consistency of the interpretation. The 10 more influential components are displayed.  
+We analyse the consistency in the interpretations by plotting the more influential components eight times for the same observation. The test is done with two categories: PRAD (this category barely overlaps with other categories) and LUAD (this category overlaps with other categories as seen in the PCA plots - it's harder to predict).  
 
-The results are:  
+```{r echo=FALSE, fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+lime_PCA_PRAD = get_PCA_explanation(rep(which(cancer[training_index] == 4)[1],8))  # training_index was random
+lime_PCA_LUAD = get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],8))
 
-- For PRAD (doesn't overlap with other categories) the results are consistent. $R^2$ is usually high (depends on the randomly selected observation). The interpretation is dominated by 1 or 2 components.  
-
-- For LUAD (overlaps with other categories) the selected components are also rather consistent. $R^2$ is also usually high. The interpretation is also dominated by 1 or 2 components but they are not as dominant as with category PRAD and the non-dominant features are more repeated between interpretations.  
-
-```{r message=FALSE, warning=FALSE, include=FALSE}
-library(lime)
-# Setup of lime::model_type()
-model_type.keras.engine.sequential.Sequential <- function(x, ...) {"classification"}
-# Setup of lime::predict_model()
-predict_model.keras.engine.sequential.Sequential <- function (x, newdata, type, ...) {
-  pred <- predict(object = x, x = as.matrix(newdata))
-  data.frame(BRCA = pred[,1], COAD = pred[,2], KIRC = pred[,3], LUAD = pred[,4], PRAD = pred[,5])
-}
-```
-
-```{r echo=TRUE, fig.width=8, fig.height=8}
-# PRAD category
-#plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 4)[1],4),5000))
-
-# LUAD category
-#plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000))
-
-plot_explanations(explanation_PCA)
-```
-
-NEW
-As you saw in the above plot_features() plot, the output provides the model fit. In this case the best simple model fit for the given local regions was R^2 = 0.59 for case 3. Considering there are several knobs we can turn when performing the LIME algorithm, we can treat these as tuning parameters to try find the best fit model for the local region. This helps to maximize the amount of trust we can have in the local region explanation.
-
-As an example, the following changes the distance function to use the manhattan distance algorithm, we increase the kernel width substantially to create a larger local region, and we change our feature selection approach to a LARS lasso model. The result is a fairly substantial increase in our explanation fits.
-
-```{r eval=FALSE, fig.height=8, fig.width=8, include=FALSE}
-plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,0.25))
-plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,0.50))
-plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,0.75))
-plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,1.25))
-plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,1.75))
-plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,3))
-plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,5))
-plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,10))
+par(mfrow=c(1,2))
+plot_explanations(lime_PCA_PRAD)
+plot_explanations(lime_PCA_LUAD)
+par(mfrow=c(1,1))
 ```
 
 \  
 
-We now check the correlation between the PCA version of the global surrogate model and the local lime models.  
+Some observations:  
 
-The lasso surrogate model is fitted again with 10 selected components to fairly compare them with the 10 selected features with lime (as close to 10 features as possible, it depends on the lambda grid and the category):  
+* The plots show that the interpretations are consistent.  
 
-```{r message=FALSE, warning=FALSE, include=FALSE}
-gc()
-```
+* There is more variance in the selection of the components for PRAD (easier to predict), probably because the influence is concentrated in just one component (PC3) compared to LUAD.  
 
-```{r echo=FALSE}
-surrogate_pca = glmnet(x_train_pca$x[,1:pcs_n], cancer[training_index], alpha = 1, family = "multinomial", nlambda=300, lambda.min.ratio=0.00001)
-surrogate_pca_features = get_surrogate_features(surrogate_pca, 10)
+* $R^2$ is high in both categories, specially with category PRAD:  
 
-coeffs_pca_sur = setNames(data.frame(matrix(ncol = pcs_n, nrow = 0)), as.vector(sprintf("PC%i",1:pcs_n)))
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+cat("\nR^2 mean for PRAD:\n")
+round(mean(lime_PCA_PRAD$model_r2),4)
 
-for (i in 0:4){
-
-  lop = surrogate_pca_features[["coeffs"]][[as.character(i)]]
-
-  for (j in 1:(length(lop)))
-    coeffs_pca_sur[i+1,names(lop)[j]] = lop[j]
-}
-
-rownames(coeffs_pca_sur) = paste(levels(labels),"(global)")
-coeffs_pca_sur[is.na(coeffs_pca_sur)] = 0
-
-print(coeffs_pca_sur[,colSums(coeffs_pca_sur) != 0][,1:5])
-```
-
-```{r}
-# crea el sim data y predice sus outputs con predict_model
-#case_res <- predict_model(x = black_box, newdata = as.data.frame(x_train), type = 'raw') %>% tibble::as_tibble()    #case_res <- set_labels(case_res, black_box)
-
-# selecciona los n_features mas importantes con lasso teniendo en cuenta los pesos
-#labels <- names(case_res)[order(as.data.frame(case_res)[1,], decreasing = TRUE)[seq_len(10)]]
-#fit <- glmnet(x[shuffle_order,], case_res[[labels[label_i]]], weights = weights[shuffle_order], alpha = 1, nlambda = 300)
-
-# fits with ridge model
-#fit <- glmnet(x[shuffle_order, features], y[[label]][shuffle_order], weights = weights[shuffle_order], alpha = 0, lambda = 2 / length(y[[label]]))
-
-####################
-
-case_res <- predict_model(x = black_box, newdata = as.data.frame(x_train), type = 'raw') %>% tibble::as_tibble()
-
-get_sur_cof <- function(cat, n_features=10)
-{
-  feat_selection <- glmnet(x_train_pca$x[,1:pcs_n], case_res[[cat]], alpha = 1, nlambda = 300)
-  
-  has_value <- apply(coef(feat_selection)[-1, ], 2, function(x) x != 0)
-  f_count <- apply(has_value, 2, sum)
-  row <- rev(which(f_count <= n_features))[1]
-  features <- which(has_value[, row])
-
-  glmnet(x_train_pca$x[,features], case_res[[cat]], alpha = 0, lambda = 2 / length(case_res[[cat]]))
-}
-
-fit = get_sur_cof("LUAD")
-r2 <- fit$dev.ratio
-aacoefs <- coef(fit)
+cat("\nR^2 mean LUAD:\n")
+round(mean(lime_PCA_LUAD$model_r2),4)
 ```
 
 
 \  
 
-The lime local models are fitted for all the observations in categories LUAD and PRAD (more than 100 each) and using 3000 permutations for each interpretation.  
+We now check the correlation between the global surrogate model and the local lime models of all the observations in all the categories, using the training data and 2000 permutations for each observation.  
+
 
 ```{r message=FALSE, warning=FALSE, include=FALSE}
-get_category_coeffs <- function(category, n_permutations = 4000)
+get_category_coeffs <- function(category, n_permutations = 2000)
 {
   datapoints_index = which(cancer[training_index] == category)
   
@@ -751,6 +700,7 @@ get_category_coeffs <- function(category, n_permutations = 4000)
   explanation_PCA_cases = tidyr::nest(explanation_PCA, key = -case)
   
   coeffs_cat = setNames(data.frame(matrix(ncol = pcs_n, nrow = 0)), as.vector(sprintf("PC%i",1:pcs_n)))
+  colnames(coeffs_cat) = c("PC01","PC02","PC03","PC04","PC05","PC06","PC07","PC08","PC09",colnames(coeffs_cat[,10:ncol(coeffs_cat)]))
   coeffs_names = vector()
   
   for (i in 1:nrow(explanation_PCA_cases)) {
@@ -776,49 +726,54 @@ coeffs_LUAD = get_category_coeffs(3)
 coeffs_PRAD = get_category_coeffs(4)
 ```
 
-```{r echo=FALSE}
-print(coeffs_LUAD[1:10,colSums(coeffs_LUAD) != 0][,1:5])
-print(coeffs_PRAD[1:10,colSums(coeffs_PRAD) != 0][,1:5])
+```{r message=FALSE, warning=FALSE, include=FALSE}
+gc()
 ```
 
-\  
+The coefficients of the selected features in the interpretations of all the observations for the same category are summarized in a single list of component coefficients. Each summarized component coefficient will be computed with a statistic describing the central tendency of the coefficient across the observations.  
 
-In order to compare the global lasso model with the lime models, the coefficients of the selected features in the interpretations of all the observations for the same category are summarized in a single list of component coefficients. Each summarized component coefficient will be computed with a statistic describing the central tendency of the coefficient across the observations.  
+To decide which statistic to use we analyse the more influential features for each category. To measure the influence we use the sum of the absolute values of the coefficients of all the observations for each component.  
 
-To decide which statistic to use we analyse the more influential features for each category. To measure the influence we use the sum of the absolute values of the coefficients of all the observations for each component:  
+```{r echo=FALSE, fig.height=7, fig.width=6, message=FALSE, warning=FALSE}
+library(wordspace)
+library(gplots)
 
-```{r echo=FALSE}
 abs_sums_BRCA = apply(abs(coeffs_BRCA), 2, sum)
-infl_comp_BRCA = sort(abs_sums_BRCA, decreasing = TRUE)[1:16]
-cat("\nsum of the absoulte values of the coefficients for BRCA:\n")
-round(infl_comp_BRCA,5)
-
 abs_sums_COAD = apply(abs(coeffs_COAD), 2, sum)
-infl_comp_COAD = sort(abs_sums_COAD, decreasing = TRUE)[1:16]
-cat("\nsum of the absoulte values of the coefficients for COAD:\n")
-round(infl_comp_COAD,5)
-
 abs_sums_KIRC = apply(abs(coeffs_KIRC), 2, sum)
-infl_comp_KIRC = sort(abs_sums_KIRC, decreasing = TRUE)[1:16]
-cat("\nsum of the absoulte values of the coefficients for KIRC:\n")
-round(infl_comp_KIRC,5)
-
 abs_sums_PRAD = apply(abs(coeffs_PRAD), 2, sum)
-infl_comp_PRAD = sort(abs_sums_PRAD, decreasing = TRUE)[1:16]
-cat("\nsum of the absoulte values of the coefficients for PRAD:\n")
-round(infl_comp_PRAD,5)
-
 abs_sums_LUAD = apply(abs(coeffs_LUAD), 2, sum)
-infl_comp_LUAD = sort(abs_sums_LUAD, decreasing = TRUE)[1:16]
-cat("\nsum of the absoulte values of the coefficients for LUAD:\n")
-round(infl_comp_LUAD,5)
+
+plot_coeff_abssum <- function()
+{
+  m = as.matrix(abs_sums_BRCA)
+  m = cbind(m, as.matrix(abs_sums_COAD))
+  m = cbind(m, as.matrix(abs_sums_KIRC))
+  m = cbind(m, as.matrix(abs_sums_LUAD))
+  m = cbind(m, as.matrix(abs_sums_PRAD))
+  colnames(m) = c("BRCA","COAD","KIRC","LUAD","PRAD")
+  
+  m = normalize.cols(m)
+  m = m[1:30,]
+  
+  par(cex.main=0.7)
+  heatmap.2(m, col= colorRampPalette(c("white","blue"))(n = 99), breaks=seq(0,1,length=100), symkey=FALSE, key=TRUE, Rowv=F, Colv=F, cexCol =1, srtCol=45, main="Sum of absolute values\n of component coefficients (normalized)")
+}
+
+plot_coeff_abssum()
 ```
 
 \  
 
-Below are displayed the distributions of the 16 more influential components for both categories. The vertical red line represents the mean, the blue one represents the median.  
+Below are displayed the distributions of the 16 more influential components for all the categories. The vertical red line represents the mean, the blue one represents the median.  
 
 ```{r echo=FALSE, fig.align="center", fig.height=6, fig.width=10, message=FALSE, warning=FALSE}
+infl_comp_COAD = sort(abs_sums_COAD, decreasing = TRUE)[1:16]
+infl_comp_BRCA = sort(abs_sums_BRCA, decreasing = TRUE)[1:16]
+infl_comp_KIRC = sort(abs_sums_KIRC, decreasing = TRUE)[1:16]
+infl_comp_PRAD = sort(abs_sums_PRAD, decreasing = TRUE)[1:16]
+infl_comp_LUAD = sort(abs_sums_LUAD, decreasing = TRUE)[1:16]
+
 library(tidyr)
 library(purrr)
 library(ggplot2)
@@ -855,184 +810,98 @@ We can see that the more influential components are more or less symmetric, wher
 
 To avoid the components that only appear as influential for a few observations (and when they are included in the list of 10 more important components their value is very small) we use the median to compute the representing value of the component coefficient for the whole category. The median will ignore components that come up rarely and have small values by setting them to 0 in the summarize component coefficient.  
 
-Also note that the variance of the coefficients for the more dominant components is higher in category LUAD (the one overlapping other categories in the data space - harder to predict):  
-
-```{r echo=FALSE}
-cat("\nstandard deviation of first 3 more influential component coefficients for PRAD:\n")
-round(apply(coeffs_PRAD[,names(infl_comp_PRAD)[1:3]], 2, sd),5)
-
-cat("\n\nstandard deviation of first 3 more influential component coefficients for LUAD:\n")
-round(apply(coeffs_LUAD[,names(infl_comp_LUAD)[1:3]], 2, sd),5)
-```
-
-\  
-
 We compute a single set of coefficients for each category using the median of the components coefficients from all the observations for both categories, and get a histogram to compare them with the surrogate lasso model coefficients:  
 
-```{r echo=FALSE, fig.height=17, fig.width=6, message=FALSE, warning=FALSE}
-fun = median
+```{r echo=FALSE, fig.height=9, fig.width=6, message=FALSE, warning=FALSE}
+#library(unikn)
 
-coeffs_pca = t(as.matrix(coeffs_pca_sur))
-coeffs_pca = cbind(coeffs_pca,apply(coeffs_BRCA, 2, fun))
-coeffs_pca = cbind(coeffs_pca,apply(coeffs_COAD, 2, fun))
-coeffs_pca = cbind(coeffs_pca,apply(coeffs_KIRC, 2, fun))
-coeffs_pca = cbind(coeffs_pca,apply(coeffs_LUAD, 2, fun))
-coeffs_pca = cbind(coeffs_pca,apply(coeffs_PRAD, 2, fun))
+plot_stat_coeffs <- function(fun,legend)
+{
+  coeffs_pca = apply(coeffs_BRCA, 2, fun)
+  coeffs_pca = cbind(coeffs_pca,apply(coeffs_COAD, 2, fun))
+  coeffs_pca = cbind(coeffs_pca,apply(coeffs_KIRC, 2, fun))
+  coeffs_pca = cbind(coeffs_pca,apply(coeffs_LUAD, 2, fun))
+  coeffs_pca = cbind(coeffs_pca,apply(coeffs_PRAD, 2, fun))
 
-coeffs_pca = coeffs_pca[,c(1,6,2,7,3,8,4,9,5,10)]
-colnames(coeffs_pca) = c("BRCA (global)", "BRCA (lime)", "COAD (global)", "COAD (lime)", "KIRC (global)", "KIRC (lime)", "LUAD  (global)", "LUAD (lime)", "PRAD (global)", "PRAD (lime)")
-
-# removing rows with all 0s
-coeffs_pca = coeffs_pca[rowSums(coeffs_pca) != 0,]
-
-# normalizing
-library(wordspace)
-coeffs_pca = normalize.cols(coeffs_pca)
-
-max_c = max(abs(coeffs_pca))
-col_breaks = c(seq(-max_c,-0.0001,length=100),  # for red
-               seq(+0.0001,+max_c,length=100))  # for blue
-
-library(unikn)
-library(gplots)
-my_palette <- c(colorRampPalette(c("red","white"))(n = 99), "white", colorRampPalette(c("white","blue"))(n = 99))
-heatmap.2(coeffs_pca, col= my_palette, breaks=col_breaks, symkey=FALSE, key=TRUE, Rowv=NA, Colv=NA,
-          offsetCol = -104, srtCol=45, cexCol=1.2, adjCol = c(0,1))
-```
-
-We can see there is high correlation, specially for category LUAD.  
-
-TODO: por que LUAD se ajusta mejor?  
-TODO: por que PC1 y PC2 son tomados en cuenta en lime pero no el global lasso?  
-TODO: he tenido que normalizar las filas, por que los coeficientes en lime son un orden de magnitud mas pequenos comparados con los coeficientes de global lasso. Por que esa diferencia? Coeficientes originales:  
-```{r echo=FALSE}
-coeffs_pca = t(as.matrix(coeffs_pca_sur))
-coeffs_pca = cbind(coeffs_pca,apply(coeffs_LUAD, 2, fun))
-coeffs_pca = cbind(coeffs_pca,apply(coeffs_PRAD, 2, fun))
-colnames(coeffs_pca) = c(colnames(coeffs_pca)[1:5], "LUAD (lime)", "PRAD (lime)")
-print(coeffs_pca[1:10,])
-```
-
-
-\  
-
-Correlation plot of coefficients between lime interpretations of 20 observations and the global lasso model for the same category:  
-
-```{r echo=FALSE, message=FALSE, warning=FALSE}
-library(corrplot)
-cof = coeffs_pca_sur[4,]
-cof = rbind(cof, coeffs_LUAD[1:20,])
-cof = normalize.rows(as.matrix(cof))
-
-models_c = t(cof)
-corrplot(cor(models_c),is.corr=T)
-
-
-cof2 = coeffs_pca_sur[5,]
-cof2 = rbind(cof2, coeffs_PRAD[1:20,])
-cof2 = normalize.rows(as.matrix(cof2))
-
-models_c2 = t(cof2)
-corrplot(cor(models_c2),is.corr=T)
-```
-
-We can see that there is less correlation between coefficients for category PRAD (easier to predict). The reason for this could be that with PRAD we get 1 or 2 dominant components explaining the predictions, while the rest of the components are less relevant and therefore have smaller and more variable values. With LUAD, different observations have more components explaining the prediction in common, even if the variance of the weights of these common components is higher compared to PRAD.
-
-
-
-
-
-
-\newpage
-
-
-
-
-
-
-
-## LIME with discretized variables
-
-\  
-
-To reduce the variability of the the interpretations, an option is to discretize the data space. This is done in the _lime_ package with the parameter **bin_continuous** set to _true_ and specifying the number of bins for the variable values (quantiles are computed for each variable to segment the distribution in categories - there is no actual order).  
-
-We try again the same samples as before. Some observations:  
-
-For the PRAD category (doesn't overlap with other categories)  
-* Only a few features are significant (between 1 and 4 in my tests).  
-* The result is more consistent (more common features) than with continuous variables, but still there are some differences.  
-* $R^2$ is high.  
-
-For the LUAD category (overlaps with other categories)  
-* Only one feature is significant.  
-* The dominant feature is the same in all the cases - very consistent.  
-* $R^2$ is very low.  
-
-TODO: explicar por que ocurre lo anterior descrito.  
-
-The interpretation with ranges of values is probably more clear. The discretization of the data in the interpretations will be acceptable depending on the domain, some practitioners using the black box as a tool might not need the level of "granularity" of continuous values and will prefer more "abstract" interpretations.
-
-```{r echo=TRUE, fig.height=8, fig.width=8, message=FALSE, warning=FALSE}
-get_discrete_instance_explanation <- function(datapoints_index, explainer) {
-
-  explanation_all_discrete  = lime::explain(
-    x = as.data.frame(x_test)[datapoints_index,],
-    explainer = explainer, 
-    n_permutations = 10000,
-    #kernel_width = 0.75,
-    feature_select = "lasso_path",
-    n_features = n_features,
-    n_labels = 1
-  )
-}
-
-explainer_all_discrete = lime(
-  x = as.data.frame(x_train),
-  model = black_box,
-  #use_density = TRUE,
-  bin_continuous = TRUE,
-  n_bins = 10
-)
-
-# PRAD category
-#plot_features(get_discrete_instance_explanation(rep(which(cancer[-training_index] == 4)[1],4),explainer_all_discrete))
-
-# LUAD category
-#plot_features(get_discrete_instance_explanation(rep(which(cancer[-training_index] == 3)[1],4),explainer_all_discrete))
-```
-
-\  
-
-TODO: relacion con el modelo lasso global (por el momento me esta dando un error de memoria al crear el modelo lasso global con variables categoricas:)
-
-```{r eval=FALSE, include=FALSE}
-x_train_discrete = genes[training_index,]
-
-for (i in 1:ncol(x_train_discrete)) {
+  # removing rows with all 0s
+  coeffs_pca = coeffs_pca[rowSums(coeffs_pca) != 0,]
   
-  discrete_values = as.factor(cut(genes[training_index,i], unique(explainer_all_discrete$bin_cuts[[i]]), include.lowest = TRUE))
-
-  # Lasso needs at least 2 levels for categorical values
-  if (length(levels(discrete_values)) > 1)
-    x_train_discrete[,i] = as.vector(discrete_values)
-  else
-    x_train_discrete[,i] = NA
+  # normalizing
+  library(wordspace)
+  coeffs_pca = normalize.cols(coeffs_pca)
+  
+  max_c = max(abs(coeffs_pca))
+  col_breaks = c(seq(-max_c,-0.0001,length=100),  # for red
+                 seq(+0.0001,+max_c,length=100))  # for blue
+  
+  par(cex.main=0.7)
+  my_palette <- c(colorRampPalette(c("brown1","white"))(n = 99), "white", colorRampPalette(c("white","dodgerblue"))(n = 99))
+  heatmap.2(coeffs_pca[1:(min(nrow(coeffs_pca),30)),], col= my_palette, breaks=col_breaks, symkey=FALSE, key=TRUE, Rowv=NA, Colv=NA,
+            srtCol=45, cexCol=1, main=legend)
 }
 
-x_train_discrete = t(na.omit(t(x_train_discrete)))
-x_train_discrete_m = model.matrix( ~ ., as.data.frame(x_train_discrete))
+plot_stat_coeffs(median,"Components influence (median)")
+```
+
+```{r echo=FALSE, fig.height=13, fig.width=6, message=FALSE, warning=FALSE}
+plot_stat_coeffs(mean,"Components influence (mean)")
+```
+
+
+\newpage 
+
+Disentangling the component coefficients of a particular observation to get the more influential individual genes:  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+LUAD_PCA_coords = x_train_pca$rotation[,as.matrix(lime_PCA_LUAD[lime_PCA_LUAD$case==1,"feature"])]
+influential_components_weights = as.matrix(lime_PCA_LUAD[lime_PCA_LUAD$case==1,"feature_weight"])
+gene_coeffs = LUAD_PCA_coords %*% influential_components_weights
+
+influential_genes = names(sort(abs(gene_coeffs[,]), decreasing = TRUE)[1:100])
+gene_coeffs[influential_genes,]
+```
+
+
+\newpage
+
+Correlation heatmap of interpretations for all the observations of category LUAD:  
+
+```{r echo=FALSE, fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
+library(corrplot)
+
+plot_corr <- function()
+{
+  heatmap(signif(cor(t(coeffs_LUAD)),2), symm=TRUE, col=colorRampPalette(c("brown1", "white", "dodgerblue"))(20), Rowv = NA, Colv = NA)
+}
+
+plot_corr()
 ```
 
 
 
+
+
+
+
 \newpage
+
+
+
+
+
 
 
 
 
 
 ## Interpretation with clusters of variables
+
+A classic example of this are superpixels in the field of image classification. A superpixel represents a segment of an image that group pixeles that are interconnected and share similar colors. As opposed to individual pixels, this representation is natural for humans and simplifies the identification of specific regions that could have high influence in the classification of an image. For instance, if a machine learning model classifies the below picture as a goose, it's very likely that the superpixel representing the beak is selected in the LIME interpretation. The simulated data in this case consists in copies of the original picture where some superpixels are zeroed (set to white), so the local model is able to distinguish between superpixels that have an impact in the classification and those that are less relevant.  
+
+(image taken from https://pbiecek.github.io/ema/LIME.html)
+```{r echo=FALSE, out.extra='', out.width = '100%', fig.align="center"}
+knitr::include_graphics("pictures_1/goose_poodle.png")
+```
 
 TODO:
 
@@ -1083,7 +952,7 @@ clusters = clusters[1:(length(clusters)-1)]  #X.quali column?
 
 ```{r echo=TRUE, message=FALSE, warning=FALSE}
 # "p is the percentage of non-zeroed clusters to use in each simulated data point
-get_cluster_explanation <- function(datapoint_index, p = 0.2)
+get_cluster_explanation <- function(datapoint_index, p = 0.2, n_permutations = 500)
 {
   # the instance of interest to interpret
   instance = as.data.frame(x_test)[datapoint_index,]
@@ -1137,7 +1006,7 @@ get_cluster_explanation <- function(datapoint_index, p = 0.2)
   lime::explain(
     x = all_ones,
     explainer = explainer_cluster, 
-    n_permutations = 500,
+    n_permutations = n_permutations,
     #kernel_width = 0.75,
     feature_select = "lasso_path",
     n_features = n_features,
@@ -1149,7 +1018,26 @@ get_cluster_explanation <- function(datapoint_index, p = 0.2)
 #plot_features(get_cluster_explanation(which(cancer[-training_index] == 4)[1]))
 
 # LUAD category
-#plot_features(get_cluster_explanation(which(cancer[-training_index] == 3)[1]))
+plot_features(get_cluster_explanation(which(cancer[-training_index] == 3)[1]))
+```
+
+```{r}
+library(msgl)
+
+fr_fit = msgl::cv(x_train, cancer[training_index], grouping = clusters, standardize = FALSE, lambda = 0.001)
+```
+
+
+```{r}
+#cols=brewer.pal(5,name="Set1")
+
+plot(fr_fit$b0,main="Coefficient vs Step",
+     ylab="Intercept",
+     lab="Step (decreasing Lambda =>)",
+     #col=cols[1],
+     #xlim=c(-1,100),
+     #ylim=c(5,max(fr_fit$b0)),
+     type="l",lwd=4)
 ```
 
 
@@ -1158,7 +1046,9 @@ get_cluster_explanation <- function(datapoint_index, p = 0.2)
 
 
 
-\newpage
+
+
+
 
 
 
@@ -1193,7 +1083,27 @@ elastic net (0.5)?
 
 intercetps? important? meaning?
 
-TODO: dibujar en plot PC1 vs PC2 vs las interpretaciones intereantes (limites, etx)
+
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  
+  
+Trying with different kernel widths / distance functions
+
+
+As you saw in the above plot_features() plot, the output provides the model fit. In this case the best simple model fit for the given local regions was R^2 = 0.59 for case 3. Considering there are several knobs we can turn when performing the LIME algorithm, we can treat these as tuning parameters to try find the best fit model for the local region. This helps to maximize the amount of trust we can have in the local region explanation.
+
+As an example, the following changes the distance function to use the manhattan distance algorithm, we increase the kernel width substantially to create a larger local region, and we change our feature selection approach to a LARS lasso model. The result is a fairly substantial increase in our explanation fits.
+
+plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,0.25))
+plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,0.50))
+plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,0.75))
+plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,1.25))
+plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,1.75))
+plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,3))
+plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,5))
+plot_features(get_PCA_explanation(rep(which(cancer[training_index] == 3)[1],4),5000,10))
+
+
 
 - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
